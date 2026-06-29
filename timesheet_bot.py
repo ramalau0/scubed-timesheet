@@ -6,8 +6,10 @@ Per-day comments are enriched from Outlook Web calendar events, git commit histo
 """
 
 import fnmatch
+import html
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -71,17 +73,26 @@ def load_mappings() -> dict | None:
 
 def resolve_project_ids(repo_name: str, catalog: dict, mappings: dict) -> dict | None:
     """Map a repo folder name to (client_id, project_id, activity_id, designation_id) via mappings."""
-    client_id = mappings.get("default_client_id")
+    client_id  = mappings.get("default_client_id")
+    project_id = mappings.get("default_project_id")
+
     for m in mappings.get("mappings", []):
         if repo_name and fnmatch.fnmatch(repo_name.lower(), m["pattern"].lower()):
-            client_id = m["client_id"]
+            client_id  = m["client_id"]
+            project_id = m.get("project_id")
             break
+
     client = next((c for c in catalog["clients"] if c["id"] == client_id), None)
     if client is None and catalog["clients"]:
         client = catalog["clients"][0]
     if client is None or not client["projects"]:
         return None
-    project = client["projects"][0]
+
+    if project_id:
+        project = next((p for p in client["projects"] if p["id"] == project_id), client["projects"][0])
+    else:
+        project = client["projects"][0]
+
     return {
         "client_id": client["id"],
         "project_id": project["id"],
@@ -554,6 +565,53 @@ async def discover_ids(page: Page, save: bool = False):
         print(f"\n✅ Saved to {ENV_FILE}")
 
 
+def _unescape_catalog(data):
+    """Recursively decode HTML entities in all string values returned by the S-Cubed API."""
+    if isinstance(data, dict):
+        return {k: _unescape_catalog(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_unescape_catalog(v) for v in data]
+    if isinstance(data, str):
+        return html.unescape(data)
+    return data
+
+
+def _derive_patterns(catalog: dict) -> list[dict]:
+    """
+    Auto-derive glob patterns from project names in the catalog.
+    Algorithm: strip everything up to and including the last ' - ', then take the
+    first word with 3+ alphanumeric chars, lowercase it, append '*'.
+    Each pattern carries the exact project_id so resolve_project_ids routes correctly.
+    """
+    patterns = []
+    seen = set()
+    for client in catalog["clients"]:
+        for project in client["projects"]:
+            name = project["name"]
+            # Strip organisational prefix (e.g. "DevOps Project - ", "TES - ")
+            if " - " in name:
+                name = name.rsplit(" - ", 1)[-1]
+            # Find first word with 3+ alphanumeric chars
+            keyword = ""
+            for word in name.split():
+                clean = re.sub(r"[^a-z0-9]", "", word.lower())
+                if len(clean) >= 3:
+                    keyword = clean
+                    break
+            if not keyword:
+                continue
+            pattern = f"{keyword}*"
+            if pattern in seen:
+                continue
+            seen.add(pattern)
+            patterns.append({
+                "pattern": pattern,
+                "client_id": client["id"],
+                "project_id": project["id"],
+            })
+    return patterns
+
+
 async def discover_all(page: Page):
     """Crawl all clients/projects/activities/designations non-interactively and save catalog + mappings."""
     await navigate_to_timesheets(page)
@@ -605,8 +663,11 @@ async def discover_all(page: Page):
         [emp_id, entity_id],
     )
 
+    # Decode HTML entities (API returns &amp;, &#39; etc. in name strings)
+    catalog = _unescape_catalog(catalog)
+
     CATALOG_FILE.write_text(json.dumps(catalog, indent=2))
-    print(f"Catalog saved → {CATALOG_FILE}")
+    print(f"Catalog saved -> {CATALOG_FILE}")
     for c in catalog["clients"]:
         print(f"  {c['name']} (ID={c['id']}): {len(c['projects'])} project(s)")
         for p in c["projects"]:
@@ -615,16 +676,24 @@ async def discover_all(page: Page):
     write_env({"EMPLOYEE_ID": str(emp_id), "ENTITY_ID": str(entity_id)})
 
     if not MAPPINGS_FILE.exists():
-        default_client = catalog["clients"][0] if catalog["clients"] else {}
+        default_client  = catalog["clients"][0] if catalog["clients"] else {}
+        default_project = default_client.get("projects", [{}])[0] if default_client else {}
+        patterns        = _derive_patterns(catalog)
         mappings = {
-            "default_client_id": default_client.get("id"),
-            "mappings": []
+            "default_client_id":  default_client.get("id"),
+            "default_project_id": default_project.get("id"),
+            "mappings": patterns,
         }
         MAPPINGS_FILE.write_text(json.dumps(mappings, indent=2))
-        print(f"\nMappings template created → {MAPPINGS_FILE}")
-        print("Edit 'mappings' to route folder-name patterns to the right client. Example:")
-        for c in catalog["clients"]:
-            print(f'  {{"pattern": "your-prefix*", "client_id": {c["id"]}}}  # {c["name"]}')
+        print(f"\nMappings generated -> {MAPPINGS_FILE}  ({len(patterns)} pattern(s))")
+        for p in patterns:
+            client_name = next((c["name"] for c in catalog["clients"] if c["id"] == p["client_id"]), "?")
+            project_name = next(
+                (proj["name"] for c in catalog["clients"] for proj in c["projects"] if proj["id"] == p["project_id"]),
+                "?"
+            )
+            print(f"  {p['pattern']!r:20s} -> {client_name} / {project_name}")
+        print("\nReview project_mappings.json and adjust patterns if needed.")
     else:
         print(f"Mappings already exist at {MAPPINGS_FILE} — not overwritten.")
 

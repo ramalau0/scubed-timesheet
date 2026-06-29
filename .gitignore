@@ -6,3 +6,4 @@ logs/
 session.json
 outlook_session.json
 client_catalog.json
+project_mappings.json
