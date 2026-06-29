@@ -48,7 +48,7 @@ DESIGNATION_ID = int(os.environ["DESIGNATION_ID"]) if os.getenv("DESIGNATION_ID"
 EMPLOYEE_ID    = int(os.environ["EMPLOYEE_ID"])    if os.getenv("EMPLOYEE_ID")    else None
 ENTITY_ID      = int(os.getenv("ENTITY_ID", "1"))
 HOURS_PER_DAY  = float(os.getenv("HOURS_PER_DAY", "8"))
-WEEKLY_COMMENT = os.getenv("WEEKLY_COMMENT", "Software development, analysis and implementation.")
+WEEKLY_COMMENT = os.getenv("WEEKLY_COMMENT") or "Software development, analysis and implementation."
 SUBMIT_AFTER_SAVE = os.getenv("SUBMIT_AFTER_SAVE", "false").lower() == "true"
 USE_CALENDAR   = os.getenv("USE_CALENDAR", "true").lower() == "true"
 WORK_DIR       = Path(os.getenv("WORK_DIR", ".")).resolve()
