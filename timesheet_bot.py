@@ -8,6 +8,11 @@ Per-day comments are enriched from Outlook Web calendar events and Claude CLI pr
 import json
 import os
 import sys
+
+# Fix Windows console encoding for emoji/unicode characters
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -336,11 +341,17 @@ async def login(context: BrowserContext, page: Page, headless: bool = False) -> 
     ).first.click()
     await page.wait_for_timeout(3000)
 
-    if "scubed.aspx" in page.url:
+    # If redirected to Microsoft OAuth, wait for user to complete MFA
+    if "microsoftonline.com" in page.url or "login.microsoft" in page.url:
+        print("Microsoft SSO detected - complete login/MFA in the browser...")
+        await page.wait_for_url("**/scubed.aspx**", timeout=120000)
+        await page.wait_for_timeout(2000)
+
+    if "dcxconnect" in page.url and "scubed" in page.url:
         print("Login successful.")
         return True
 
-    print("⚠️  Login failed. Check SCUBED_USERNAME / SCUBED_PASSWORD in .env")
+    print("[WARN] Login failed. Check SCUBED_USERNAME / SCUBED_PASSWORD in .env")
     return False
 
 
@@ -351,7 +362,7 @@ async def save_session(context: BrowserContext):
 
 
 async def navigate_to_timesheets(page: Page):
-    await page.locator('text=My Timesheets').first.click()
+    await page.locator('text=My Timesheets').first.click(timeout=60000)
     await page.wait_for_timeout(2000)
 
 
@@ -576,7 +587,7 @@ async def main():
     try:
         await run(headless=True, command=command, target=target)
     except AuthRequired as e:
-        print(f"🔐 {e} — opening browser…")
+        print(f"[AUTH] {e} - opening browser...")
         await run(headless=False, command=command, target=target)
 
 
