@@ -49,6 +49,7 @@ EMPLOYEE_ID    = int(os.environ["EMPLOYEE_ID"])    if os.getenv("EMPLOYEE_ID")  
 ENTITY_ID      = int(os.getenv("ENTITY_ID", "1"))
 HOURS_PER_DAY  = float(os.getenv("HOURS_PER_DAY", "8"))
 WEEKLY_COMMENT = os.getenv("WEEKLY_COMMENT", "Regular weekly hours")
+DAILY_WORK_DESCRIPTION = os.getenv("DAILY_WORK_DESCRIPTION", "")
 SUBMIT_AFTER_SAVE = os.getenv("SUBMIT_AFTER_SAVE", "false").lower() == "true"
 USE_CALENDAR   = os.getenv("USE_CALENDAR", "true").lower() == "true"
 WORK_DIR       = Path(os.getenv("WORK_DIR", ".")).resolve()
@@ -320,6 +321,8 @@ async def fetch_outlook_calendar(browser: Browser, week_dates: list[datetime], h
         await ctx.close()
         return result
 
+    except AuthRequired:
+        raise
     except Exception as e:
         print(f"⚠️  Calendar fetch skipped ({e}); using Claude history only.")
         return empty
@@ -344,20 +347,12 @@ def _join_natural(items: list[str]) -> str:
 def build_day_comment(cal_events: list[str], projects: list[str], git_work: dict[str, list[str]] | None = None) -> str:
     """
     Combine meetings + git commits + Claude project history into one readable paragraph.
-    Formula: standups + work-meetings + worked-on (with commit summaries where available).
+    Lead with DAILY_WORK_DESCRIPTION (if set) or git/Claude project work, then append meeting context.
     """
     git_work = git_work or {}
     sentences = []
 
-    standups      = [e for e in cal_events if _is_standup(e)]
-    work_meetings = [e for e in cal_events if not _is_standup(e)]
-
-    if standups:
-        sentences.append(f"Attended {_join_natural(standups)}.")
-    if work_meetings:
-        sentences.append(f"Participated in {_join_natural(work_meetings)}.")
-
-    # Union of git repos and Claude-history projects, git repos take priority for ordering
+    # Work description: git commits / Claude projects take priority; fall back to configured description
     all_projects = list(git_work.keys()) + [p for p in projects if p not in git_work]
     if all_projects:
         work_parts = []
@@ -371,6 +366,17 @@ def build_day_comment(cal_events: list[str], projects: list[str], git_work: dict
             else:
                 work_parts.append(proj)
         sentences.append(f"Worked on {_join_natural(work_parts)}.")
+    elif DAILY_WORK_DESCRIPTION:
+        sentences.append(DAILY_WORK_DESCRIPTION.rstrip(".") + ".")
+
+    # Meeting context appended after work description
+    standups      = [e for e in cal_events if _is_standup(e)]
+    work_meetings = [e for e in cal_events if not _is_standup(e)]
+
+    if standups:
+        sentences.append(f"Attended {_join_natural(standups)}.")
+    if work_meetings:
+        sentences.append(f"Participated in {_join_natural(work_meetings)}.")
 
     comment = " ".join(sentences) if sentences else WEEKLY_COMMENT
     return comment[:200]  # guard against field length limit
@@ -824,7 +830,99 @@ async def submit_entries(iframe, entry_ids: list[int]):
     print(f"Submit result: {json.dumps(result)[:300]}")
 
 
+async def test_calendar(target_date: datetime | None = None, headless: bool = False):
+    """Standalone calendar test — open Outlook, scrape events, print results. No S-Cubed login needed."""
+    date     = target_date or datetime.today()
+    week_end = week_ending_for(date)
+    days     = working_days(week_end)
+
+    print(f"Testing Outlook calendar for week of {days[0].strftime('%a %d %b')} – {days[-1].strftime('%a %d %b')}")
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=headless)
+        try:
+            cal = await fetch_outlook_calendar(browser, days, headless=headless)
+        except AuthRequired:
+            await browser.close()
+            if headless:
+                raise
+            return
+        await browser.close()
+
+    print("\n── Calendar events ───────────────────────────────")
+    total = 0
+    for d in days:
+        date_str = fmt(d)
+        events   = cal.get(date_str, [])
+        label    = d.strftime("%a %d %b")
+        if events:
+            print(f"  {label}: {', '.join(events)}")
+        else:
+            print(f"  {label}: (no events)")
+        total += len(events)
+
+    print(f"\n{total} event(s) found.")
+
+    print("\n── Comment preview ───────────────────────────────")
+    for d in days:
+        date_str = fmt(d)
+        events   = cal.get(date_str, [])
+        comment  = build_day_comment(events, [], {})
+        print(f"  {d.strftime('%a %d %b')}: {comment}")
+
+
+async def preview_week(browser: Browser, target_date: datetime | None = None, headless: bool = False):
+    """Show what create_week would submit without saving anything."""
+    date     = target_date or datetime.today()
+    week_end = week_ending_for(date)
+    days     = working_days(week_end)
+
+    catalog  = load_catalog()
+    mappings = load_mappings()
+
+    print(f"Preview for week ending {fmt(week_end)}")
+    print(f"  Days: {', '.join(d.strftime('%a %d %b') for d in days)}")
+
+    cal_events: dict[str, list[str]] = {}
+    if USE_CALENDAR:
+        cal_events = await fetch_outlook_calendar(browser, days, headless=headless)
+
+    claude_projects = {fmt(d): get_claude_projects_for_date(d) for d in days}
+    git_work        = {fmt(d): get_git_work_for_date(d) for d in days}
+
+    total_cal     = sum(len(v) for v in cal_events.values())
+    total_commits = sum(len(v) for repo_commits in git_work.values() for v in repo_commits.values())
+    print(f"\nCalendar events: {total_cal}  |  Git commits: {total_commits}")
+    print()
+
+    for d in days:
+        date_str = fmt(d)
+        events   = cal_events.get(date_str, [])
+        comment  = build_day_comment(events, claude_projects.get(date_str, []), git_work.get(date_str, {}))
+
+        client_id  = CLIENT_ID
+        project_id = PROJECT_ID
+        if catalog and mappings:
+            git_repos = list(git_work.get(date_str, {}).keys())
+            ids = resolve_project_ids(git_repos[0] if git_repos else "", catalog, mappings)
+            if ids:
+                client_id  = ids["client_id"]
+                project_id = ids["project_id"]
+
+        print(f"  {d.strftime('%a %d %b')}  [client={client_id}, project={project_id}]  {HOURS_PER_DAY}h")
+        print(f"    Events: {events or '(none)'}")
+        print(f"    Comment: {comment}")
+
+
 async def run(headless: bool, command: str, target: datetime | None):
+    if command == "test-calendar":
+        try:
+            await test_calendar(target, headless=headless)
+        except AuthRequired:
+            print("[AUTH] Outlook sign-in required — opening browser...")
+            await test_calendar(target, headless=False)
+        return
+
     session_state = json.loads(SESSION_FILE.read_text()) if SESSION_FILE.exists() else None
 
     async with async_playwright() as p:
@@ -845,9 +943,11 @@ async def run(headless: bool, command: str, target: datetime | None):
             await discover_ids(page, save=True)
         elif command == "create":
             await create_week(page, browser, target, headless=headless)
+        elif command == "preview":
+            await preview_week(browser, target, headless=headless)
         else:
             print(f"Unknown command: {command}")
-            print("Usage:  python timesheet_bot.py [discover_all | discover | create [YYYY-MM-DD]]")
+            print("Usage:  python timesheet_bot.py [discover_all | discover | create | preview | test-calendar [YYYY-MM-DD]]")
 
         await browser.close()
 
