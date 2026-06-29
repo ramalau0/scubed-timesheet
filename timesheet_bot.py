@@ -48,8 +48,7 @@ DESIGNATION_ID = int(os.environ["DESIGNATION_ID"]) if os.getenv("DESIGNATION_ID"
 EMPLOYEE_ID    = int(os.environ["EMPLOYEE_ID"])    if os.getenv("EMPLOYEE_ID")    else None
 ENTITY_ID      = int(os.getenv("ENTITY_ID", "1"))
 HOURS_PER_DAY  = float(os.getenv("HOURS_PER_DAY", "8"))
-WEEKLY_COMMENT = os.getenv("WEEKLY_COMMENT", "Regular weekly hours")
-DAILY_WORK_DESCRIPTION = os.getenv("DAILY_WORK_DESCRIPTION", "")
+WEEKLY_COMMENT = os.getenv("WEEKLY_COMMENT", "Software development, analysis and implementation.")
 SUBMIT_AFTER_SAVE = os.getenv("SUBMIT_AFTER_SAVE", "false").lower() == "true"
 USE_CALENDAR   = os.getenv("USE_CALENDAR", "true").lower() == "true"
 WORK_DIR       = Path(os.getenv("WORK_DIR", ".")).resolve()
@@ -347,13 +346,12 @@ def _join_natural(items: list[str]) -> str:
 
 def build_day_comment(cal_events: list[str], projects: list[str], git_work: dict[str, list[str]] | None = None) -> str:
     """
-    Combine meetings + git commits + Claude project history into one readable paragraph.
-    Lead with DAILY_WORK_DESCRIPTION (if set) or git/Claude project work, then append meeting context.
+    Build a timesheet comment.
+    Always leads with WEEKLY_COMMENT, then appends git/Claude project work and meeting context.
     """
     git_work = git_work or {}
-    sentences = []
+    sentences = [WEEKLY_COMMENT.rstrip(".") + "."]
 
-    # Work description: git commits / Claude projects take priority; fall back to configured description
     all_projects = list(git_work.keys()) + [p for p in projects if p not in git_work]
     if all_projects:
         work_parts = []
@@ -367,10 +365,7 @@ def build_day_comment(cal_events: list[str], projects: list[str], git_work: dict
             else:
                 work_parts.append(proj)
         sentences.append(f"Worked on {_join_natural(work_parts)}.")
-    elif DAILY_WORK_DESCRIPTION:
-        sentences.append(DAILY_WORK_DESCRIPTION.rstrip(".") + ".")
 
-    # Meeting context appended after work description
     standups      = [e for e in cal_events if _is_standup(e)]
     work_meetings = [e for e in cal_events if not _is_standup(e)]
 
@@ -379,8 +374,7 @@ def build_day_comment(cal_events: list[str], projects: list[str], git_work: dict
     if work_meetings:
         sentences.append(f"Participated in {_join_natural(work_meetings)}.")
 
-    comment = " ".join(sentences) if sentences else WEEKLY_COMMENT
-    return comment[:200]  # guard against field length limit
+    return " ".join(sentences)[:200]  # guard against field length limit
 
 
 # ── Timesheet entry ────────────────────────────────────────────────────────────
