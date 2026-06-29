@@ -2,11 +2,13 @@
 """
 S-Cubed Timesheet Automation
 Automatically creates and optionally submits weekly timesheets on dcxconnect.datacentrix.co.za
-Per-day comments are enriched from Outlook Web calendar events and Claude CLI project history.
+Per-day comments are enriched from Outlook Web calendar events, git commit history, and Claude CLI project history.
 """
 
+import fnmatch
 import json
 import os
+import subprocess
 import sys
 
 # Fix Windows console encoding for emoji/unicode characters
@@ -31,6 +33,8 @@ LOGIN_URL  = f"{BASE_URL}/scubed.aspx"
 SESSION_FILE         = Path(__file__).parent / "session.json"
 OUTLOOK_SESSION_FILE = Path(__file__).parent / "outlook_session.json"
 CLAUDE_HISTORY_FILE  = Path.home() / ".claude" / "history.jsonl"
+CATALOG_FILE         = Path(__file__).parent / "client_catalog.json"
+MAPPINGS_FILE        = Path(__file__).parent / "project_mappings.json"
 
 # ── Config from .env ──────────────────────────────────────────────────────────
 USERNAME       = os.environ["SCUBED_USERNAME"]
@@ -55,6 +59,43 @@ ENV_FILE = Path(__file__).parent / ".env"
 
 def ids_configured() -> bool:
     return all([CLIENT_ID, PROJECT_ID, ACTIVITY_ID, DESIGNATION_ID, EMPLOYEE_ID])
+
+
+def load_catalog() -> dict | None:
+    return json.loads(CATALOG_FILE.read_text()) if CATALOG_FILE.exists() else None
+
+
+def load_mappings() -> dict | None:
+    return json.loads(MAPPINGS_FILE.read_text()) if MAPPINGS_FILE.exists() else None
+
+
+def resolve_project_ids(repo_name: str, catalog: dict, mappings: dict) -> dict | None:
+    """Map a repo folder name to (client_id, project_id, activity_id, designation_id) via mappings."""
+    client_id = mappings.get("default_client_id")
+    for m in mappings.get("mappings", []):
+        if repo_name and fnmatch.fnmatch(repo_name.lower(), m["pattern"].lower()):
+            client_id = m["client_id"]
+            break
+    client = next((c for c in catalog["clients"] if c["id"] == client_id), None)
+    if client is None and catalog["clients"]:
+        client = catalog["clients"][0]
+    if client is None or not client["projects"]:
+        return None
+    project = client["projects"][0]
+    return {
+        "client_id": client["id"],
+        "project_id": project["id"],
+        "activity_id": project["activity_id"],
+        "designation_id": project["designation_id"],
+    }
+
+
+def split_hours(total: float, n: int) -> list[float]:
+    """Split total into n parts; last part absorbs rounding remainder so they sum exactly."""
+    per = round(total / n, 2)
+    parts = [per] * n
+    parts[-1] = round(total - per * (n - 1), 2)
+    return parts
 
 
 def write_env(updates: dict[str, str]):
@@ -140,6 +181,33 @@ def get_claude_projects_for_date(target_date: datetime) -> list[str]:
                 pass
 
     return sorted(projects)
+
+
+def get_git_work_for_date(target_date: datetime) -> dict[str, list[str]]:
+    """Return {repo_name: [commit_subject, ...]} for repos under WORK_DIR with commits on target_date."""
+    date_str = target_date.strftime("%Y-%m-%d")
+    result: dict[str, list[str]] = {}
+    try:
+        for repo in sorted(WORK_DIR.iterdir()):
+            if not (repo / ".git").exists():
+                continue
+            try:
+                out = subprocess.check_output(
+                    [
+                        "git", "log", "--format=%s",
+                        f"--since={date_str} 00:00:00",
+                        f"--until={date_str} 23:59:59",
+                    ],
+                    cwd=repo, text=True, stderr=subprocess.DEVNULL, timeout=5,
+                )
+                msgs = [m.strip() for m in out.splitlines() if m.strip()]
+                if msgs:
+                    result[repo.name] = msgs
+            except (subprocess.SubprocessError, OSError):
+                pass
+    except OSError:
+        pass
+    return result
 
 
 # ── Outlook Web calendar ───────────────────────────────────────────────────────
@@ -262,24 +330,36 @@ def _join_natural(items: list[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def build_day_comment(cal_events: list[str], projects: list[str]) -> str:
+def build_day_comment(cal_events: list[str], projects: list[str], git_work: dict[str, list[str]] | None = None) -> str:
     """
-    Combine meetings + Claude project history into one readable paragraph.
-    Formula: standups sentence + work-meetings sentence + projects sentence.
+    Combine meetings + git commits + Claude project history into one readable paragraph.
+    Formula: standups + work-meetings + worked-on (with commit summaries where available).
     """
+    git_work = git_work or {}
     sentences = []
 
-    standups     = [e for e in cal_events if _is_standup(e)]
+    standups      = [e for e in cal_events if _is_standup(e)]
     work_meetings = [e for e in cal_events if not _is_standup(e)]
 
     if standups:
         sentences.append(f"Attended {_join_natural(standups)}.")
-
     if work_meetings:
         sentences.append(f"Participated in {_join_natural(work_meetings)}.")
 
-    if projects:
-        sentences.append(f"Worked on {_join_natural(projects)}.")
+    # Union of git repos and Claude-history projects, git repos take priority for ordering
+    all_projects = list(git_work.keys()) + [p for p in projects if p not in git_work]
+    if all_projects:
+        work_parts = []
+        for proj in all_projects:
+            commits = git_work.get(proj, [])
+            if commits:
+                summary = "; ".join(commits[:3])
+                if len(summary) > 80:
+                    summary = summary[:77] + "..."
+                work_parts.append(f"{proj} ({summary})")
+            else:
+                work_parts.append(proj)
+        sentences.append(f"Worked on {_join_natural(work_parts)}.")
 
     comment = " ".join(sentences) if sentences else WEEKLY_COMMENT
     return comment[:200]  # guard against field length limit
@@ -287,14 +367,15 @@ def build_day_comment(cal_events: list[str], projects: list[str]) -> str:
 
 # ── Timesheet entry ────────────────────────────────────────────────────────────
 
-def build_entry(date: datetime, hours: float, comment: str = WEEKLY_COMMENT) -> dict:
+def build_entry(date: datetime, hours: float, comment: str, client_id: int, project_id: int, activity_id: int, designation_id: int) -> dict:
+    emp_id = EMPLOYEE_ID or (load_catalog() or {}).get("employee_id")
     return {
         "Timesheet_EntryID": -1,
-        "EmployeeID": EMPLOYEE_ID,
-        "ClientID": CLIENT_ID,
-        "ProjectID": PROJECT_ID,
-        "ActivityID": ACTIVITY_ID,
-        "DesignationID": DESIGNATION_ID,
+        "EmployeeID": emp_id,
+        "ClientID": client_id,
+        "ProjectID": project_id,
+        "ActivityID": activity_id,
+        "DesignationID": designation_id,
         "WeekEnding": None,
         "EntryDate": fmt(date),
         "DayID": None,
@@ -473,15 +554,103 @@ async def discover_ids(page: Page, save: bool = False):
         print(f"\n✅ Saved to {ENV_FILE}")
 
 
+async def discover_all(page: Page):
+    """Crawl all clients/projects/activities/designations non-interactively and save catalog + mappings."""
+    await navigate_to_timesheets(page)
+    iframe = page.frame(name="Content") or page.frames[1]
+
+    emp_id, entity_id = await iframe.evaluate(
+        "() => [SCUBED.Employee.ID, SCUBED.Employee.EntityID || 1]"
+    )
+    print(f"Employee {emp_id} / Entity {entity_id} — crawling catalog...")
+
+    catalog = await iframe.evaluate(
+        """async ([empId, entityId]) => {
+            const BASE = '/SCUBED/pages/tlc_api/Timesheet_Entries.aspx';
+            async function api(endpoint, body) {
+                const r = await fetch(BASE + '/' + endpoint, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json; charset=utf-8'},
+                    body: JSON.stringify(body),
+                    credentials: 'include'
+                });
+                return (await r.json()).d || [];
+            }
+
+            const clients = await api('GetEntityClients_DropDownList', {EntityID: entityId, EmployeeID: empId});
+            const result = {employee_id: empId, entity_id: entityId, clients: []};
+
+            for (const c of clients) {
+                const projects = await api('GetClientProjects_DropDownList', {ClientID: c.Value, EmployeeID: empId});
+                const clientEntry = {id: parseInt(c.Value), name: c.Text, projects: []};
+
+                for (const p of (projects || [])) {
+                    const [activities, designations] = await Promise.all([
+                        api('GetProjectActivities_DropDownList', {ProjectID: p.Value, EntityID: entityId}),
+                        api('GetEmployeeDesignations_DropDownList', {EntityID: entityId, EmployeeID: empId, ProjectID: p.Value})
+                    ]);
+                    const act = (activities || [])[0] || {Value: '1', Text: 'Default'};
+                    const des = (designations || [])[0] || {Value: '1', Text: 'Default'};
+                    clientEntry.projects.push({
+                        id: parseInt(p.Value),
+                        name: p.Text,
+                        activity_id: parseInt(act.Value),
+                        designation_id: parseInt(des.Value)
+                    });
+                }
+                result.clients.push(clientEntry);
+            }
+            return result;
+        }""",
+        [emp_id, entity_id],
+    )
+
+    CATALOG_FILE.write_text(json.dumps(catalog, indent=2))
+    print(f"Catalog saved → {CATALOG_FILE}")
+    for c in catalog["clients"]:
+        print(f"  {c['name']} (ID={c['id']}): {len(c['projects'])} project(s)")
+        for p in c["projects"]:
+            print(f"    - {p['name']} (ID={p['id']}, activity={p['activity_id']}, designation={p['designation_id']})")
+
+    write_env({"EMPLOYEE_ID": str(emp_id), "ENTITY_ID": str(entity_id)})
+
+    if not MAPPINGS_FILE.exists():
+        default_client = catalog["clients"][0] if catalog["clients"] else {}
+        mappings = {
+            "default_client_id": default_client.get("id"),
+            "mappings": []
+        }
+        MAPPINGS_FILE.write_text(json.dumps(mappings, indent=2))
+        print(f"\nMappings template created → {MAPPINGS_FILE}")
+        print("Edit 'mappings' to route folder-name patterns to the right client. Example:")
+        for c in catalog["clients"]:
+            print(f'  {{"pattern": "your-prefix*", "client_id": {c["id"]}}}  # {c["name"]}')
+    else:
+        print(f"Mappings already exist at {MAPPINGS_FILE} — not overwritten.")
+
+
 async def create_week(page: Page, browser: Browser, target_date: datetime | None = None, headless: bool = False):
-    """Create timesheet entries with per-day comments from calendar + Claude history."""
+    """Create timesheet entries with per-day comments and auto-selected client/project from catalog."""
     date     = target_date or datetime.today()
     week_end = week_ending_for(date)
     days     = working_days(week_end)
 
-    print(f"\nCreating timesheet for week ending {fmt(week_end)}")
+    catalog  = load_catalog()
+    mappings = load_mappings()
+    use_auto = catalog is not None and mappings is not None
+
+    if use_auto:
+        print(f"\nAuto-select mode: using {CATALOG_FILE.name} + {MAPPINGS_FILE.name}")
+    elif ids_configured():
+        print(f"\nSingle-client mode: CLIENT_ID={CLIENT_ID}, PROJECT_ID={PROJECT_ID}")
+    else:
+        print("No client_catalog.json and no CLIENT_ID in .env.")
+        print("Run 'python timesheet_bot.py discover_all' to set up the catalog.")
+        return
+
+    print(f"Creating timesheet for week ending {fmt(week_end)}")
     print(f"  Days: {', '.join(d.strftime('%a %d %b') for d in days)}")
-    print(f"  Hours/day: {HOURS_PER_DAY}  →  Total: {HOURS_PER_DAY * 5}h")
+    print(f"  Hours/day: {HOURS_PER_DAY}  ->  Total: {HOURS_PER_DAY * 5}h")
 
     # Gather per-day enrichment
     cal_events: dict[str, list[str]] = {}
@@ -489,18 +658,54 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
         cal_events = await fetch_outlook_calendar(browser, days, headless=headless)
 
     claude_projects = {fmt(d): get_claude_projects_for_date(d) for d in days}
+    git_work        = {fmt(d): get_git_work_for_date(d) for d in days}
 
-    # Build entries with per-day comments
+    total_commits = sum(len(v) for repo_commits in git_work.values() for v in repo_commits.values())
+    print(f"Git history: found {total_commits} commit(s) across the week.")
+
     print()
     new_entries = []
     for d in days:
         date_str = fmt(d)
-        comment  = build_day_comment(
-            cal_events.get(date_str, []),
-            claude_projects.get(date_str, []),
-        )
-        print(f"  {d.strftime('%a %d %b')}  →  {comment}")
-        new_entries.append(build_entry(d, HOURS_PER_DAY, comment))
+        events   = cal_events.get(date_str, [])
+
+        if use_auto:
+            # Union of git repos and Claude folders; git repos first (have commit detail)
+            git_repos    = list(git_work.get(date_str, {}).keys())
+            claude_repos = [p for p in claude_projects.get(date_str, []) if p not in git_repos]
+            all_repos    = git_repos + claude_repos
+
+            # Map each repo to (client_id, project_id); group repos by that key
+            groups: dict[tuple, dict] = {}
+            for repo in all_repos:
+                ids = resolve_project_ids(repo, catalog, mappings)
+                if ids is None:
+                    continue
+                key = (ids["client_id"], ids["project_id"])
+                if key not in groups:
+                    groups[key] = {"ids": ids, "repos": [], "git": {}}
+                groups[key]["repos"].append(repo)
+                if repo in git_work.get(date_str, {}):
+                    groups[key]["git"][repo] = git_work[date_str][repo]
+
+            if not groups:
+                # No repos matched — use default client with full hours
+                ids = resolve_project_ids("", catalog, mappings)
+                if ids:
+                    comment = build_day_comment(events, [], {})
+                    new_entries.append(build_entry(d, HOURS_PER_DAY, comment, **ids))
+                    print(f"  {d.strftime('%a %d %b')} (default) {HOURS_PER_DAY}h  ->  {comment}")
+                continue
+
+            hours_list = split_hours(HOURS_PER_DAY, len(groups))
+            for (client_id, _), group, hours in zip(groups.keys(), groups.values(), hours_list):
+                comment = build_day_comment(events, group["repos"], group["git"])
+                new_entries.append(build_entry(d, hours, comment, **group["ids"]))
+                print(f"  {d.strftime('%a %d %b')} [client={client_id}] {hours}h  ->  {comment}")
+        else:
+            comment = build_day_comment(events, claude_projects.get(date_str, []), git_work.get(date_str, {}))
+            new_entries.append(build_entry(d, HOURS_PER_DAY, comment, CLIENT_ID, PROJECT_ID, ACTIVITY_ID, DESIGNATION_ID))
+            print(f"  {d.strftime('%a %d %b')}  ->  {comment}")
 
     await navigate_to_timesheets(page)
     iframe = page.frame(name="Content") or page.frames[1]
@@ -565,16 +770,15 @@ async def run(headless: bool, command: str, target: datetime | None):
 
         await save_session(context)
 
-        if command == "discover":
+        if command == "discover_all":
+            await discover_all(page)
+        elif command == "discover":
             await discover_ids(page, save=True)
         elif command == "create":
-            if not ids_configured():
-                print("First run — discovering your IDs from S-Cubed…")
-                await discover_ids(page, save=True)
             await create_week(page, browser, target, headless=headless)
         else:
             print(f"Unknown command: {command}")
-            print("Usage:  python timesheet_bot.py [create [YYYY-MM-DD]]")
+            print("Usage:  python timesheet_bot.py [discover_all | discover | create [YYYY-MM-DD]]")
 
         await browser.close()
 
