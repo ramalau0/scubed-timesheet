@@ -149,9 +149,10 @@ def write_env(updates: dict[str, str]):
 # ── Date helpers ───────────────────────────────────────────────────────────────
 
 def week_ending_for(date: datetime) -> datetime:
-    """Return the Sunday that ends the week containing `date`."""
-    days_until_sunday = (6 - date.weekday()) % 7
-    return date + timedelta(days=days_until_sunday)
+    """Return the most recently completed week-ending Sunday (always <= date)."""
+    # weekday(): Mon=0 … Sun=6. Days since the most recent Sunday = (weekday+1) % 7.
+    days_since_sunday = (date.weekday() + 1) % 7
+    return date - timedelta(days=days_since_sunday)
 
 
 def working_days(week_end: datetime) -> list[datetime]:
@@ -174,7 +175,7 @@ def get_claude_projects_for_date(target_date: datetime) -> list[str]:
     date_str = target_date.strftime("%Y-%m-%d")
     projects: set[str] = set()
 
-    with open(CLAUDE_HISTORY_FILE) as f:
+    with open(CLAUDE_HISTORY_FILE, encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
                 rec = json.loads(line)
