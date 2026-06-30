@@ -1,8 +1,8 @@
 # PyInstaller spec — used by GitHub Actions to build per-platform binaries.
 # Build locally: pyinstaller scubed_timesheet.spec
+# Playwright ships its own PyInstaller hooks; no collect_all needed.
 
 import sys
-from PyInstaller.building.build_main import Analysis, PYZ, EXE, BUNDLE, COLLECT
 
 block_cipher = None
 
@@ -17,7 +17,6 @@ a = Analysis(
         'playwright',
         'playwright.async_api',
         'playwright.sync_api',
-        '_playwright',
     ],
     hookspath=[],
     hooksconfig={},
@@ -28,13 +27,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-
-# Pull in everything from the playwright package
-from PyInstaller.utils.hooks import collect_all
-playwright_datas, playwright_binaries, playwright_hiddenimports = collect_all('playwright')
-a.datas    += playwright_datas
-a.binaries += playwright_binaries
-a.hiddenimports += playwright_hiddenimports
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -52,15 +44,15 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,          # no terminal window on Windows/Mac
+    console=False,
     disable_windowed_traceback=False,
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon=None,
 )
 
-# Mac: wrap in a .app bundle
 if sys.platform == 'darwin':
     app = BUNDLE(
         exe,
