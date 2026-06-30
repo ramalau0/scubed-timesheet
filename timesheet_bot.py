@@ -14,9 +14,12 @@ import subprocess
 import sys
 
 # Fix Windows console encoding for emoji/unicode characters
+# sys.stdout/stderr are None when running as a windowed PyInstaller app (no console)
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stdout is not None:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stderr is not None:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
