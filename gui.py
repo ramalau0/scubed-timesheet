@@ -4,11 +4,19 @@ Wraps timesheet_bot.py in a simple Tkinter window.
 """
 import asyncio
 import io
+import os
+import subprocess
 import sys
 import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import scrolledtext, ttk
 from datetime import datetime
+
+# When packaged with PyInstaller, redirect Playwright's browser lookup to a
+# persistent location in the user's home directory instead of the temp bundle dir.
+if getattr(sys, 'frozen', False) and 'PLAYWRIGHT_BROWSERS_PATH' not in os.environ:
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(Path.home() / '.ms-playwright')
 
 from timesheet_bot import (
     AuthRequired,
@@ -45,6 +53,9 @@ class TimesheetApp:
 
         self._build_ui()
         self._refresh_status()
+        # Ensure Playwright Chromium is installed on Mac/Linux (Windows uses system Edge)
+        if sys.platform != "win32":
+            self.root.after(500, self._ensure_browser)
 
     def _build_ui(self):
         outer = ttk.Frame(self.root, padding=16)
@@ -92,6 +103,25 @@ class TimesheetApp:
             self.status_var.set(f"✅  Ready — {emp}")
         else:
             self.status_var.set("⚠️   Not configured — click First-time Setup")
+
+    # ── Browser setup ─────────────────────────────────────────────────────────
+
+    def _ensure_browser(self):
+        """Install Playwright Chromium in a background thread if not already present."""
+        def worker():
+            try:
+                from playwright._impl._driver import compute_driver_executable
+                driver = compute_driver_executable()
+                result = subprocess.run(
+                    [str(driver), "install", "chromium"],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    self._log_from_thread(f"⚠️  Browser install failed: {result.stderr[:300]}")
+            except Exception as exc:
+                self._log_from_thread(f"⚠️  Browser check error: {exc}")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ── Log helpers ───────────────────────────────────────────────────────────
 

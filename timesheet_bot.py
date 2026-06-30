@@ -837,6 +837,13 @@ async def submit_entries(iframe, entry_ids: list[int]):
     print(f"Submit result: {json.dumps(result)[:300]}")
 
 
+async def _launch(p, headless: bool):
+    """Launch the right browser for this platform. Windows uses system Edge so no download is needed."""
+    if sys.platform == "win32":
+        return await p.chromium.launch(channel="msedge", headless=headless)
+    return await p.chromium.launch(headless=headless)
+
+
 async def test_calendar(target_date: datetime | None = None, headless: bool = False):
     """Standalone calendar test — open Outlook, scrape events, print results. No S-Cubed login needed."""
     date     = target_date or datetime.today()
@@ -846,7 +853,7 @@ async def test_calendar(target_date: datetime | None = None, headless: bool = Fa
     print(f"Testing Outlook calendar for week of {days[0].strftime('%a %d %b')} – {days[-1].strftime('%a %d %b')}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
+        browser = await _launch(p, headless=headless)
         try:
             cal = await fetch_outlook_calendar(browser, days, headless=headless)
         except AuthRequired:
@@ -931,7 +938,7 @@ async def run(headless: bool, command: str, target: datetime | None):
         return
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
+        browser = await _launch(p, headless=headless)
 
         # ── Outlook calendar first (so login order is Outlook → S-Cubed) ──
         pre_cal: dict | None = None
