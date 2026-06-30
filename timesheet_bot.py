@@ -402,7 +402,7 @@ def build_entry(date: datetime, hours: float, comment: str, client_id: int, proj
         "Hours": hours,
         "InvoicedHours": 0,
         "EntryTimestamp": INSERT_TIMESTAMP,
-        "Comment": json.dumps(comment),
+        "Comment": comment,
         "Invoiced": False,
         "InvoiceNumber": "",
         "WriteOff": False,
@@ -774,28 +774,45 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
 
     result = await iframe.evaluate(
         """async ([newEntries]) => {
+            const body = JSON.stringify({
+                OldTimesheet_EntryList: [],
+                NewTimesheet_EntryList: newEntries,
+                Save: true
+            });
             const r = await fetch('/SCUBED/pages/tlc_api/Timesheet_Entries.aspx/BatchTransactionTimesheet_Entry', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json; charset=utf-8'},
-                body: JSON.stringify({
-                    OldTimesheet_EntryList: [],
-                    NewTimesheet_EntryList: newEntries,
-                    Save: true
-                }),
+                body: body,
                 credentials: 'include'
             });
-            return r.json();
+            const text = await r.text();
+            let parsed = null;
+            try { parsed = JSON.parse(text); } catch(e) {}
+            return {status: r.status, body: parsed, raw: parsed ? null : text.substring(0, 2000)};
         }""",
         [new_entries],
     )
 
-    if result.get("d") is not None:
-        ids = [e.get("Timesheet_EntryID") for e in (result["d"] or [])]
+    status = result.get("status")
+    body   = result.get("body")
+
+    if status == 200 and body and body.get("d") is not None:
+        ids = [e.get("Timesheet_EntryID") for e in (body["d"] or [])]
         print(f"\n✅ Saved {len(ids)} entries  (IDs: {ids})")
         if SUBMIT_AFTER_SAVE and ids:
             await submit_entries(iframe, ids)
     else:
-        print(f"\n❌ Save failed: {json.dumps(result)[:400]}")
+        print(f"\n❌ Save failed (HTTP {status}): {json.dumps(body or result.get('raw', ''))[:500]}")
+        print(f"\n── Request payload (for debugging) ──")
+        for i, entry in enumerate(new_entries):
+            print(f"  Entry {i}: date={entry['EntryDate']} hours={entry['Hours']} "
+                  f"client={entry['ClientID']} project={entry['ProjectID']} "
+                  f"activity={entry['ActivityID']} designation={entry['DesignationID']} "
+                  f"employee={entry['EmployeeID']}")
+            print(f"    Comment: {entry['Comment'][:120]}")
+        print(f"  WeekEnding={new_entries[0].get('WeekEnding')} "
+              f"DayID={new_entries[0].get('DayID')} "
+              f"Timestamp={new_entries[0].get('Timestamp')}")
 
 
 async def submit_entries(iframe, entry_ids: list[int]):
