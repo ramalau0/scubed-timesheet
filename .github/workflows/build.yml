@@ -15,14 +15,17 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: ScubedTimesheet.exe
-            install_browser: false      # uses system Edge at runtime, no install needed
+            artifact_name: ScubedTimesheet.exe
+            release_name: ScubedTimesheet-windows.exe
+            install_browser: false
           - os: macos-latest
-            artifact: ScubedTimesheet
+            artifact_name: ScubedTimesheet
+            release_name: ScubedTimesheet-macos
             install_browser: true
             playwright_browser: chromium
           - os: ubuntu-latest
-            artifact: ScubedTimesheet
+            artifact_name: ScubedTimesheet
+            release_name: ScubedTimesheet-linux
             install_browser: true
             playwright_browser: chromium
 
@@ -45,13 +48,17 @@ jobs:
       - name: Build
         run: pyinstaller scubed_timesheet.spec
 
+      - name: Rename binary for release
+        shell: bash
+        run: mv dist/${{ matrix.artifact_name }} dist/${{ matrix.release_name }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ScubedTimesheet-${{ matrix.os }}
-          path: dist/${{ matrix.artifact }}
+          name: ${{ matrix.release_name }}
+          path: dist/${{ matrix.release_name }}
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ matrix.artifact }}
+          files: dist/${{ matrix.release_name }}

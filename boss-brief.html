@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S-Cubed Timesheet Automation — Product Brief</title>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: #f1f5f9;
+    color: #1e293b;
+    line-height: 1.5;
+  }
+
+  .page { max-width: 960px; margin: 0 auto; padding: 48px 24px 80px; }
+
+  /* ── Header ── */
+  .header { margin-bottom: 40px; }
+  .header h1 { font-size: 28px; font-weight: 800; color: #0f172a; letter-spacing: -.5px; }
+  .header .meta { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+  .tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: #e2e8f0; color: #475569; border-radius: 20px;
+    padding: 3px 10px; font-size: 12px; font-weight: 600;
+  }
+  .tag.green { background: #dcfce7; color: #166534; }
+  .tag.blue  { background: #dbeafe; color: #1d4ed8; }
+
+  /* ── Card ── */
+  .card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 32px;
+    margin-bottom: 24px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .card-title {
+    font-size: 11px; font-weight: 700; color: #94a3b8;
+    text-transform: uppercase; letter-spacing: .1em;
+    margin-bottom: 20px; display: flex; align-items: center; gap: 8px;
+  }
+  .card-title::after {
+    content: ''; flex: 1; height: 1px; background: #f1f5f9;
+  }
+
+  /* ── Icons via Lucide ── */
+  .ic { display: inline-flex; align-items: center; justify-content: center; }
+  .ic svg { width: 16px; height: 16px; }
+  .ic-lg svg { width: 22px; height: 22px; }
+  .ic-xl svg { width: 28px; height: 28px; }
+
+  /* ── Problem / Solution grid ── */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .mini-box {
+    background: #f8fafc; border-radius: 10px; padding: 20px;
+    border: 1px solid #e2e8f0;
+  }
+  .mini-box h3 { font-size: 13px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+  .mini-box ul { list-style: none; }
+  .mini-box ul li {
+    font-size: 13px; color: #475569; padding: 4px 0;
+    display: flex; align-items: flex-start; gap: 8px;
+  }
+  .mini-box ul li .ic { color: #94a3b8; flex-shrink: 0; margin-top: 1px; }
+  .mini-box.good .ic-check { color: #16a34a; }
+  .mini-box.bad  .ic-x     { color: #dc2626; }
+
+  /* ── Architecture Diagram ── */
+  .arch-diagram {
+    background: #f8fafc;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    padding: 32px 24px;
+    position: relative;
+  }
+
+  /* Zone labels */
+  .zone-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .1em; color: #94a3b8; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* ── Layer: Data Sources ── */
+  .data-sources-row {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px; margin-bottom: 0;
+  }
+  .ds-box {
+    background: #fff;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center; gap: 8px;
+    position: relative;
+  }
+  .ds-box .ds-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .ds-box .ds-name { font-size: 13px; font-weight: 700; color: #1e293b; }
+  .ds-box .ds-desc { font-size: 11px; color: #94a3b8; line-height: 1.4; }
+
+  .ds-box.outlook .ds-icon { background: #dbeafe; color: #2563eb; }
+  .ds-box.git     .ds-icon { background: #fee2e2; color: #dc2626; }
+  .ds-box.claude  .ds-icon { background: #fef3c7; color: #d97706; }
+
+  /* Arrow connector */
+  .arrow-down {
+    display: flex; justify-content: center; align-items: center;
+    height: 32px; color: #cbd5e1;
+  }
+  .arrow-down svg { width: 20px; height: 20px; }
+
+  .arrow-row {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+  .arrow-center { display: flex; justify-content: center; }
+
+  /* Merge node */
+  .merge-bar {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border-radius: 10px; color: #fff;
+    padding: 14px 20px;
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 0;
+  }
+  .merge-bar .mb-icon {
+    width: 40px; height: 40px; border-radius: 8px;
+    background: rgba(255,255,255,.15);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .merge-bar .mb-title { font-size: 14px; font-weight: 700; }
+  .merge-bar .mb-sub   { font-size: 12px; opacity: .8; margin-top: 2px; }
+
+  /* App box */
+  .app-box {
+    background: #fff;
+    border: 2px solid #6366f1;
+    border-radius: 12px;
+    padding: 18px 20px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .app-box .ab-icon {
+    width: 48px; height: 48px; border-radius: 12px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; flex-shrink: 0;
+  }
+  .app-box .ab-title { font-size: 15px; font-weight: 700; color: #1e293b; }
+  .app-box .ab-sub   { font-size: 12px; color: #64748b; margin-top: 3px; }
+  .btn-row { display: flex; gap: 8px; margin-top: 8px; }
+  .btn-chip {
+    background: #f1f5f9; border: 1px solid #e2e8f0;
+    border-radius: 6px; padding: 4px 10px;
+    font-size: 11px; font-weight: 600; color: #475569;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .btn-chip.primary { background: #eef2ff; border-color: #c7d2fe; color: #4f46e5; }
+
+  /* External system */
+  .ext-zone {
+    background: #fff7ed;
+    border: 1.5px dashed #fed7aa;
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 0;
+  }
+  .ext-zone-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: #f97316; margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
+  .ext-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .ext-box {
+    background: #fff; border-radius: 8px; border: 1.5px solid #fed7aa;
+    padding: 12px 14px; display: flex; align-items: center; gap: 12px;
+  }
+  .ext-box .ex-icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .ext-box.okta .ex-icon  { background: #fff7ed; color: #f97316; }
+  .ext-box.scubed .ex-icon { background: #f0fdf4; color: #16a34a; }
+  .ext-box .ex-name { font-size: 13px; font-weight: 700; color: #1e293b; }
+  .ext-box .ex-sub  { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+
+  /* Playwright connector */
+  .playwright-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #fef9c3; border: 1.5px solid #fde047;
+    border-radius: 20px; padding: 5px 14px;
+    font-size: 12px; font-weight: 600; color: #854d0e;
+  }
+
+  /* HTTPS badge */
+  .https-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: #dcfce7; border-radius: 6px;
+    padding: 3px 8px; font-size: 11px; font-weight: 700; color: #15803d;
+  }
+
+  /* Arrow with label */
+  .labeled-arrow {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    height: 44px; justify-content: center;
+  }
+
+  /* ── Build Pipeline ── */
+  .pipeline {
+    display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+    justify-content: center;
+  }
+  .pipe-step {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 8px; flex: 1; min-width: 110px; padding: 12px 8px;
+  }
+  .pipe-icon {
+    width: 48px; height: 48px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pipe-step .ps-name { font-size: 12px; font-weight: 700; color: #1e293b; text-align: center; }
+  .pipe-step .ps-sub  { font-size: 11px; color: #94a3b8; text-align: center; line-height: 1.3; }
+  .pipe-arrow { color: #cbd5e1; flex-shrink: 0; padding: 0 4px; margin-top: -24px; }
+  .pipe-arrow svg { width: 18px; height: 18px; }
+
+  .platform-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+  .plat-pill {
+    display: flex; align-items: center; gap: 5px;
+    border-radius: 8px; padding: 5px 12px;
+    font-size: 12px; font-weight: 600;
+  }
+  .plat-pill.win  { background: #dbeafe; color: #1d4ed8; }
+  .plat-pill.mac  { background: #f3f4f6; color: #374151; }
+  .plat-pill.lnx  { background: #fef9c3; color: #854d0e; }
+
+  /* ── Roadmap table ── */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    text-align: left; padding: 10px 16px;
+    background: #f8fafc; color: #94a3b8;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  td { padding: 12px 16px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { font-weight: 600; color: #334155; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 11px; font-weight: 700;
+  }
+  .badge.done   { background: #dcfce7; color: #15803d; }
+  .badge.next   { background: #fef3c7; color: #b45309; }
+  .badge.future { background: #f1f5f9; color: #64748b; }
+
+  /* ── Comment example ── */
+  .comment-block {
+    background: #f8fafc; border-left: 3px solid #6366f1;
+    border-radius: 0 8px 8px 0; padding: 14px 18px;
+    font-size: 13px; color: #334155; font-style: italic;
+    margin-top: 16px; line-height: 1.6;
+  }
+
+  /* ── Footer ── */
+  footer { text-align: center; color: #94a3b8; font-size: 12px; margin-top: 48px; }
+  footer a { color: #6366f1; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>S-Cubed Timesheet Automation</h1>
+    <div class="meta">
+      <span class="tag green"><i class="ic" data-lucide="check-circle-2"></i> v1.0.0 Released</span>
+      <span class="tag blue"><i class="ic" data-lucide="monitor"></i> Windows · Mac · Linux</span>
+      <span class="tag"><i class="ic" data-lucide="calendar"></i> June 2026</span>
+    </div>
+  </div>
+
+  <!-- Problem / Solution -->
+  <div class="card">
+    <div class="card-title"><i class="ic" data-lucide="target"></i> Problem &amp; Solution</div>
+    <div class="two-col">
+      <div class="mini-box bad">
+        <h3><i class="ic ic-lg" data-lucide="x-circle" style="color:#dc2626"></i> Manual Process Today</h3>
+        <ul>
+          <li><i class="ic ic-x" data-lucide="x" style="color:#fca5a5"></i> Log into S-Cubed every week manually</li>
+          <li><i class="ic ic-x" data-lucide="x" style="color:#fca5a5"></i> Remember what was worked on each day</li>
+          <li><i class="ic ic-x" data-lucide="x" style="color:#fca5a5"></i> Manually enter client, project &amp; hours</li>
+          <li><i class="ic ic-x" data-lucide="x" style="color:#fca5a5"></i> Risk of late or incomplete submissions</li>
+        </ul>
+      </div>
+      <div class="mini-box good">
+        <h3><i class="ic ic-lg" data-lucide="check-circle-2" style="color:#16a34a"></i> Automated with This Tool</h3>
+        <ul>
+          <li><i class="ic ic-check" data-lucide="check" style="color:#86efac"></i> Open app, click Submit — done in 30 sec</li>
+          <li><i class="ic ic-check" data-lucide="check" style="color:#86efac"></i> Reads calendar, git history &amp; work sessions</li>
+          <li><i class="ic ic-check" data-lucide="check" style="color:#86efac"></i> Auto-fills all fields with accurate data</li>
+          <li><i class="ic ic-check" data-lucide="check" style="color:#86efac"></i> Preview screen before anything is saved</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Architecture Diagram -->
+  <div class="card">
+    <div class="card-title"><i class="ic" data-lucide="git-branch"></i> System Architecture</div>
+
+    <div class="arch-diagram">
+
+      <!-- Zone: Client Machine -->
+      <div class="zone-label">
+        <i class="ic" data-lucide="laptop-2"></i>
+        Colleague's Machine
+      </div>
+
+      <!-- Row 1: Data Sources -->
+      <div class="data-sources-row">
+        <div class="ds-box outlook">
+          <div class="ds-icon"><i class="ic ic-xl" data-lucide="calendar-days"></i></div>
+          <div class="ds-name">Outlook Calendar</div>
+          <div class="ds-desc">Meetings &amp; events scraped from Outlook Web per day</div>
+        </div>
+        <div class="ds-box git">
+          <div class="ds-icon"><i class="ic ic-xl" data-lucide="git-commit-horizontal"></i></div>
+          <div class="ds-name">Git History</div>
+          <div class="ds-desc">Commit messages from work repos for each working day</div>
+        </div>
+        <div class="ds-box claude">
+          <div class="ds-icon"><i class="ic ic-xl" data-lucide="bot"></i></div>
+          <div class="ds-name">Claude CLI</div>
+          <div class="ds-desc">Which projects were active in Claude Code sessions</div>
+        </div>
+      </div>
+
+      <!-- Arrows down -->
+      <div class="arrow-row">
+        <div class="arrow-center"><div class="arrow-down"><i class="ic" data-lucide="arrow-down"></i></div></div>
+        <div class="arrow-center"><div class="arrow-down"><i class="ic" data-lucide="arrow-down"></i></div></div>
+        <div class="arrow-center"><div class="arrow-down"><i class="ic" data-lucide="arrow-down"></i></div></div>
+      </div>
+
+      <!-- Comment Builder -->
+      <div class="merge-bar" style="margin-bottom:0">
+        <div class="mb-icon"><i class="ic ic-xl" data-lucide="sparkles"></i></div>
+        <div>
+          <div class="mb-title">Comment &amp; Project Builder</div>
+          <div class="mb-sub">Combines all three sources into per-day comments and routes hours to the right client / project</div>
+        </div>
+      </div>
+
+      <!-- Arrow down to App -->
+      <div class="labeled-arrow">
+        <i class="ic" data-lucide="arrow-down" style="color:#cbd5e1"></i>
+      </div>
+
+      <!-- Desktop App -->
+      <div class="app-box" style="margin-bottom:0">
+        <div class="ab-icon"><i class="ic ic-xl" data-lucide="layout-dashboard"></i></div>
+        <div>
+          <div class="ab-title">S-Cubed Timesheet App</div>
+          <div class="ab-sub">Desktop GUI — runs on Windows, Mac &amp; Linux with no installation required</div>
+          <div class="btn-row">
+            <span class="btn-chip"><i class="ic" data-lucide="eye"></i> Preview</span>
+            <span class="btn-chip primary"><i class="ic" data-lucide="send"></i> Submit Timesheet</span>
+            <span class="btn-chip"><i class="ic" data-lucide="settings-2"></i> First-time Setup</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Arrow down + Playwright pill -->
+      <div class="labeled-arrow" style="height:48px; gap:6px;">
+        <i class="ic" data-lucide="arrow-down" style="color:#cbd5e1"></i>
+        <span class="playwright-pill">
+          <i class="ic" data-lucide="globe"></i>
+          Playwright headless browser
+        </span>
+        <i class="ic" data-lucide="arrow-down" style="color:#cbd5e1"></i>
+      </div>
+
+      <!-- HTTPS separator -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <div style="flex:1;height:1px;background:#fed7aa;border-style:dashed;border-width:0 0 1px 0;border-color:#fed7aa"></div>
+        <span class="https-badge"><i class="ic" data-lucide="lock"></i> HTTPS</span>
+        <div style="flex:1;height:1px;background:#fed7aa;border-style:dashed;border-width:0 0 1px 0;border-color:#fed7aa"></div>
+      </div>
+
+      <!-- External Zone -->
+      <div class="ext-zone">
+        <div class="ext-zone-label"><i class="ic" data-lucide="server"></i> Datacentrix Systems</div>
+        <div class="ext-row">
+          <div class="ext-box okta">
+            <div class="ex-icon"><i class="ic ic-lg" data-lucide="shield-check"></i></div>
+            <div>
+              <div class="ex-name">Okta SSO</div>
+              <div class="ex-sub">Company single sign-on — handles authentication for both systems</div>
+            </div>
+          </div>
+          <div class="ext-box scubed">
+            <div class="ex-icon"><i class="ic ic-lg" data-lucide="clock"></i></div>
+            <div>
+              <div class="ex-name">S-Cubed Portal</div>
+              <div class="ex-sub">dcxconnect.datacentrix.co.za — timesheet entries saved via internal API</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /.arch-diagram -->
+
+    <div class="comment-block">
+      <strong style="font-style:normal;color:#6366f1">Example auto-generated comment:</strong><br>
+      "Software development, analysis and implementation. Worked on goturbo-platform (Fix API auth middleware; Update dashboard query). Attended GoTurbo Daily Meet. Participated in Sprint Planning."
+    </div>
+  </div>
+
+  <!-- Build & Distribution Pipeline -->
+  <div class="card">
+    <div class="card-title"><i class="ic" data-lucide="package"></i> Build &amp; Distribution Pipeline</div>
+
+    <div class="pipeline">
+      <div class="pipe-step">
+        <div class="pipe-icon" style="background:#f1f5f9; color:#475569"><i class="ic ic-xl" data-lucide="code-2"></i></div>
+        <div class="ps-name">Push Tag</div>
+        <div class="ps-sub">Developer tags a version<br><code style="font-size:11px">git tag v1.0.0</code></div>
+      </div>
+      <div class="pipe-arrow"><i class="ic" data-lucide="chevron-right"></i></div>
+      <div class="pipe-step">
+        <div class="pipe-icon" style="background:#fef3c7; color:#d97706"><i class="ic ic-xl" data-lucide="cpu"></i></div>
+        <div class="ps-name">GitHub Actions</div>
+        <div class="ps-sub">Automatically builds on 3 platforms simultaneously</div>
+      </div>
+      <div class="pipe-arrow"><i class="ic" data-lucide="chevron-right"></i></div>
+      <div class="pipe-step">
+        <div class="pipe-icon" style="background:#ede9fe; color:#7c3aed"><i class="ic ic-xl" data-lucide="package-2"></i></div>
+        <div class="ps-name">PyInstaller</div>
+        <div class="ps-sub">Bundles Python + all dependencies into a single file</div>
+      </div>
+      <div class="pipe-arrow"><i class="ic" data-lucide="chevron-right"></i></div>
+      <div class="pipe-step">
+        <div class="pipe-icon" style="background:#dcfce7; color:#16a34a"><i class="ic ic-xl" data-lucide="download-cloud"></i></div>
+        <div class="ps-name">GitHub Release</div>
+        <div class="ps-sub">Binaries attached to release page — shared download link</div>
+      </div>
+    </div>
+
+    <div class="platform-row" style="margin-top:20px;">
+      <span class="plat-pill win"><i class="ic" data-lucide="monitor"></i> ScubedTimesheet-windows.exe</span>
+      <span class="plat-pill mac"><i class="ic" data-lucide="apple"></i> ScubedTimesheet-macos</span>
+      <span class="plat-pill lnx"><i class="ic" data-lucide="terminal"></i> ScubedTimesheet-linux</span>
+    </div>
+    <p style="text-align:center;font-size:12px;color:#94a3b8;margin-top:10px;">
+      Future updates: developer pushes a new tag → all three binaries rebuild automatically → colleagues download the new version
+    </p>
+  </div>
+
+  <!-- Download & Install Instructions -->
+  <div class="card">
+    <div class="card-title"><i class="ic" data-lucide="download"></i> Download &amp; Install Instructions</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+
+      <!-- Windows -->
+      <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:10px;padding:20px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+          <div style="width:36px;height:36px;background:#dbeafe;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#2563eb;flex-shrink:0;">
+            <i class="ic ic-lg" data-lucide="monitor"></i>
+          </div>
+          <div style="font-size:14px;font-weight:700;color:#1e293b;">Windows</div>
+        </div>
+        <ol style="padding-left:18px;font-size:13px;color:#475569;line-height:2;">
+          <li>
+            <a href="https://github.com/ramalau0/scubed-timesheet/releases/download/v1.0.0/ScubedTimesheet-windows.exe"
+               style="color:#6366f1;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
+              <i class="ic" data-lucide="download" style="width:13px;height:13px;"></i>
+              Download .exe
+            </a>
+          </li>
+          <li>Double-click <code style="background:#e2e8f0;padding:1px 5px;border-radius:4px;font-size:12px;">ScubedTimesheet-windows.exe</code></li>
+          <li>If Defender shows a warning → <strong>More info</strong> → <strong>Run anyway</strong></li>
+          <li>Click <strong>First-time Setup</strong> and log in with Okta</li>
+        </ol>
+      </div>
+
+      <!-- Mac -->
+      <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:10px;padding:20px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+          <div style="width:36px;height:36px;background:#f3f4f6;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#374151;flex-shrink:0;">
+            <i class="ic ic-lg" data-lucide="apple"></i>
+          </div>
+          <div style="font-size:14px;font-weight:700;color:#1e293b;">macOS</div>
+        </div>
+        <ol style="padding-left:18px;font-size:13px;color:#475569;line-height:2;">
+          <li>
+            <a href="https://github.com/ramalau0/scubed-timesheet/releases/download/v1.0.0/ScubedTimesheet-macos"
+               style="color:#6366f1;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
+              <i class="ic" data-lucide="download" style="width:13px;height:13px;"></i>
+              Download binary
+            </a>
+          </li>
+          <li>Open Terminal in the download folder</li>
+          <li><code style="background:#e2e8f0;padding:1px 5px;border-radius:4px;font-size:11px;">xattr -d com.apple.quarantine ScubedTimesheet-macos</code></li>
+          <li><code style="background:#e2e8f0;padding:1px 5px;border-radius:4px;font-size:11px;">chmod +x ScubedTimesheet-macos && ./ScubedTimesheet-macos</code></li>
+          <li>Click <strong>First-time Setup</strong> and log in with Okta</li>
+        </ol>
+        <p style="font-size:11px;color:#94a3b8;margin-top:8px;">Or right-click → <strong>Open</strong> → <strong>Open</strong> to skip step 3.</p>
+      </div>
+
+      <!-- Linux -->
+      <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:10px;padding:20px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+          <div style="width:36px;height:36px;background:#fef9c3;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#854d0e;flex-shrink:0;">
+            <i class="ic ic-lg" data-lucide="terminal"></i>
+          </div>
+          <div style="font-size:14px;font-weight:700;color:#1e293b;">Linux</div>
+        </div>
+        <ol style="padding-left:18px;font-size:13px;color:#475569;line-height:2;">
+          <li>
+            <a href="https://github.com/ramalau0/scubed-timesheet/releases/download/v1.0.0/ScubedTimesheet-linux"
+               style="color:#6366f1;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
+              <i class="ic" data-lucide="download" style="width:13px;height:13px;"></i>
+              Download binary
+            </a>
+          </li>
+          <li>Open Terminal in the download folder</li>
+          <li><code style="background:#e2e8f0;padding:1px 5px;border-radius:4px;font-size:11px;">chmod +x ScubedTimesheet-linux</code></li>
+          <li><code style="background:#e2e8f0;padding:1px 5px;border-radius:4px;font-size:11px;">./ScubedTimesheet-linux</code></li>
+          <li>Click <strong>First-time Setup</strong> and log in with Okta</li>
+        </ol>
+      </div>
+
+    </div>
+
+    <div style="background:#eef2ff;border:1.5px solid #c7d2fe;border-radius:10px;padding:14px 18px;margin-top:16px;display:flex;align-items:flex-start;gap:12px;">
+      <i class="ic" data-lucide="info" style="color:#6366f1;flex-shrink:0;margin-top:2px;"></i>
+      <div style="font-size:13px;color:#3730a3;line-height:1.6;">
+        <strong>First-time setup is once only.</strong> After logging in with Okta, the app runs fully headless — no browser window, no manual steps.
+        Every week after: open the app → click <strong>Preview</strong> to review → click <strong>Submit Timesheet</strong>.
+      </div>
+    </div>
+  </div>
+
+  <!-- Roadmap -->
+  <div class="card">
+    <div class="card-title"><i class="ic" data-lucide="map"></i> Roadmap</div>
+    <table>
+      <thead>
+        <tr><th>Feature</th><th>Status</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Core timesheet automation</td>
+          <td><span class="badge done"><i class="ic" data-lucide="check" style="width:12px;height:12px"></i> Done</span></td>
+          <td style="color:#475569;font-size:13px">Creates and saves weekly entries with per-day comments</td>
+        </tr>
+        <tr>
+          <td>Outlook calendar integration</td>
+          <td><span class="badge done"><i class="ic" data-lucide="check" style="width:12px;height:12px"></i> Done</span></td>
+          <td style="color:#475569;font-size:13px">Scrapes Outlook Web — no IT involvement required</td>
+        </tr>
+        <tr>
+          <td>Multi-client / project auto-routing</td>
+          <td><span class="badge done"><i class="ic" data-lucide="check" style="width:12px;height:12px"></i> Done</span></td>
+          <td style="color:#475569;font-size:13px">Splits hours across clients based on active repos each day</td>
+        </tr>
+        <tr>
+          <td>Desktop app — Windows, Mac, Linux</td>
+          <td><span class="badge done"><i class="ic" data-lucide="check" style="width:12px;height:12px"></i> Done</span></td>
+          <td style="color:#475569;font-size:13px">v1.0.0 live on GitHub Releases — download and run</td>
+        </tr>
+        <tr>
+          <td>Pilot with real users</td>
+          <td><span class="badge next"><i class="ic" data-lucide="clock" style="width:12px;height:12px"></i> Next</span></td>
+          <td style="color:#475569;font-size:13px">2–3 colleagues test it, collect feedback on accuracy</td>
+        </tr>
+        <tr>
+          <td>Duplicate entry detection</td>
+          <td><span class="badge next"><i class="ic" data-lucide="clock" style="width:12px;height:12px"></i> Next</span></td>
+          <td style="color:#475569;font-size:13px">Check if week already submitted before saving</td>
+        </tr>
+        <tr>
+          <td>Auto-submit on Friday 4pm (optional)</td>
+          <td><span class="badge next"><i class="ic" data-lucide="clock" style="width:12px;height:12px"></i> Next</span></td>
+          <td style="color:#475569;font-size:13px">Fully hands-off — user enables in settings</td>
+        </tr>
+        <tr>
+          <td>Centralised web app</td>
+          <td><span class="badge future"><i class="ic" data-lucide="circle-dashed" style="width:12px;height:12px"></i> Future</span></td>
+          <td style="color:#475569;font-size:13px">Requires IT to register an OAuth app — deferred until MVP is validated</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    S-Cubed Timesheet Automation &nbsp;·&nbsp; v1.0.0 &nbsp;·&nbsp;
+    <a href="https://github.com/ramalau0/scubed-timesheet">github.com/ramalau0/scubed-timesheet</a>
+    &nbsp;·&nbsp; June 2026
+  </footer>
+
+</div>
+
+<script>
+  lucide.createIcons();
+</script>
+</body>
+</html>
