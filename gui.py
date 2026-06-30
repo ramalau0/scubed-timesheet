@@ -53,9 +53,10 @@ class TimesheetApp:
 
         self._build_ui()
         self._refresh_status()
-        # Ensure Playwright Chromium is installed on Mac/Linux (Windows uses system Edge)
+        # On Mac/Linux: install Chromium before allowing any actions (Windows uses system Edge)
         if sys.platform != "win32":
-            self.root.after(500, self._ensure_browser)
+            self._set_busy(True)
+            self.root.after(200, self._ensure_browser)
 
     def _build_ui(self):
         outer = ttk.Frame(self.root, padding=16)
@@ -107,19 +108,37 @@ class TimesheetApp:
     # ── Browser setup ─────────────────────────────────────────────────────────
 
     def _ensure_browser(self):
-        """Install Playwright Chromium in a background thread if not already present."""
+        """Install Playwright Chromium if missing. Blocks buttons until done."""
+        browser_path = Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH', Path.home() / '.ms-playwright'))
+        # Check if any chromium_headless_shell directory already exists
+        existing = list(browser_path.glob('chromium_headless_shell-*'))
+        if existing:
+            self._set_busy(False)
+            return
+
+        self._append("Installing browser (first time only, please wait)...")
+
         def worker():
             try:
-                from playwright._impl._driver import compute_driver_executable
-                driver = compute_driver_executable()
+                # In a frozen PyInstaller bundle the driver lives in _MEIPASS
+                if getattr(sys, 'frozen', False):
+                    driver = Path(sys._MEIPASS) / 'playwright' / 'driver' / 'playwright'
+                else:
+                    from playwright._impl._driver import compute_driver_executable
+                    driver = Path(compute_driver_executable())
+
                 result = subprocess.run(
-                    [str(driver), "install", "chromium"],
+                    [str(driver), 'install', 'chromium'],
                     capture_output=True, text=True,
                 )
-                if result.returncode != 0:
-                    self._log_from_thread(f"⚠️  Browser install failed: {result.stderr[:300]}")
+                if result.returncode == 0:
+                    self._log_from_thread("Browser installed. Ready.")
+                else:
+                    self._log_from_thread(f"⚠️  Browser install failed:\n{result.stderr[:400]}")
             except Exception as exc:
-                self._log_from_thread(f"⚠️  Browser check error: {exc}")
+                self._log_from_thread(f"⚠️  Browser install error: {exc}")
+            finally:
+                self.root.after(0, lambda: self._set_busy(False))
 
         threading.Thread(target=worker, daemon=True).start()
 
