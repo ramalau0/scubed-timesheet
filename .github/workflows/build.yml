@@ -5,19 +5,25 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
             artifact: ScubedTimesheet.exe
-            playwright_browser: msedge
+            install_browser: false      # uses system Edge at runtime, no install needed
           - os: macos-latest
             artifact: ScubedTimesheet
-            playwright_browser: chrome
+            install_browser: true
+            playwright_browser: chromium
           - os: ubuntu-latest
             artifact: ScubedTimesheet
+            install_browser: true
             playwright_browser: chromium
 
     runs-on: ${{ matrix.os }}
@@ -33,6 +39,7 @@ jobs:
         run: pip install -r requirements.txt pyinstaller
 
       - name: Install Playwright browser
+        if: matrix.install_browser
         run: python -m playwright install ${{ matrix.playwright_browser }}
 
       - name: Build
