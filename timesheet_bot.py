@@ -433,7 +433,7 @@ async def login(context: BrowserContext, page: Page, headless: bool = False) -> 
         raise AuthRequired("S-Cubed login required")
 
     print("S-Cubed: please complete login/2FA in the browser window…")
-    await page.wait_for_url("*dcxconnect*scubed*", timeout=300000)
+    await page.wait_for_url(re.compile(r"dcxconnect.*scubed", re.IGNORECASE), timeout=300000)
     await page.wait_for_timeout(1000)
 
     print("Login successful.")
