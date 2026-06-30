@@ -39,8 +39,6 @@ CATALOG_FILE         = Path(__file__).parent / "client_catalog.json"
 MAPPINGS_FILE        = Path(__file__).parent / "project_mappings.json"
 
 # ── Config from .env ──────────────────────────────────────────────────────────
-USERNAME       = os.environ["SCUBED_USERNAME"]
-PASSWORD       = os.environ["SCUBED_PASSWORD"]
 CLIENT_ID      = int(os.environ["CLIENT_ID"])      if os.getenv("CLIENT_ID")      else None
 PROJECT_ID     = int(os.environ["PROJECT_ID"])     if os.getenv("PROJECT_ID")     else None
 ACTIVITY_ID    = int(os.environ["ACTIVITY_ID"])    if os.getenv("ACTIVITY_ID")    else None
@@ -252,10 +250,20 @@ async def fetch_outlook_calendar(browser: Browser, week_dates: list[datetime], h
             wait_until="domcontentloaded",
             timeout=30000,
         )
-        await page.wait_for_timeout(3000)
+        # Outlook's JS auth check fires after domcontentloaded and may redirect to Okta.
+        # Wait up to 12s specifically for an auth redirect; timeout means session is valid.
+        auth_redirected = False
+        try:
+            await page.wait_for_url(
+                lambda url: "okta.com" in url or "microsoftonline.com" in url or "login.microsoft" in url,
+                timeout=12000,
+            )
+            auth_redirected = True
+        except Exception:
+            pass
 
         # Handle sign-in redirect (Datacentrix routes through Okta SSO)
-        if "login" in page.url or "microsoftonline" in page.url or "okta.com" in page.url:
+        if auth_redirected or "login" in page.url or "microsoftonline" in page.url or "okta.com" in page.url:
             if headless:
                 await ctx.close()
                 raise AuthRequired("Outlook sign-in required")
@@ -424,28 +432,12 @@ async def login(context: BrowserContext, page: Page, headless: bool = False) -> 
     if headless:
         raise AuthRequired("S-Cubed login required")
 
-    print("Logging in…")
-    await page.locator(
-        'input[name*="SystemAccount"], input[id*="SystemAccount"], input[type="text"]'
-    ).first.fill(USERNAME)
-    await page.locator('input[type="password"]').fill(PASSWORD)
-    await page.locator(
-        'input[value="Sign In"], a:has-text("Sign In"), button:has-text("Sign In")'
-    ).first.click()
-    await page.wait_for_timeout(3000)
+    print("S-Cubed: please complete login/2FA in the browser window…")
+    await page.wait_for_url("*dcxconnect*scubed*", timeout=300000)
+    await page.wait_for_timeout(1000)
 
-    # If redirected to Microsoft OAuth, wait for user to complete MFA
-    if "microsoftonline.com" in page.url or "login.microsoft" in page.url:
-        print("Microsoft SSO detected - complete login/MFA in the browser...")
-        await page.wait_for_url("**/scubed.aspx**", timeout=120000)
-        await page.wait_for_timeout(2000)
-
-    if "dcxconnect" in page.url and "scubed" in page.url:
-        print("Login successful.")
-        return True
-
-    print("[WARN] Login failed. Check SCUBED_USERNAME / SCUBED_PASSWORD in .env")
-    return False
+    print("Login successful.")
+    return True
 
 
 async def save_session(context: BrowserContext):
@@ -699,7 +691,7 @@ async def discover_all(page: Page):
         print(f"Mappings already exist at {MAPPINGS_FILE} — not overwritten.")
 
 
-async def create_week(page: Page, browser: Browser, target_date: datetime | None = None, headless: bool = False):
+async def create_week(page: Page, browser: Browser, target_date: datetime | None = None, headless: bool = False, pre_cal: dict | None = None):
     """Create timesheet entries with per-day comments and auto-selected client/project from catalog."""
     date     = target_date or datetime.today()
     week_end = week_ending_for(date)
@@ -725,7 +717,7 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
     # Gather per-day enrichment
     cal_events: dict[str, list[str]] = {}
     if USE_CALENDAR:
-        cal_events = await fetch_outlook_calendar(browser, days, headless=headless)
+        cal_events = pre_cal if pre_cal is not None else await fetch_outlook_calendar(browser, days, headless=headless)
 
     claude_projects = {fmt(d): get_claude_projects_for_date(d) for d in days}
     git_work        = {fmt(d): get_git_work_for_date(d) for d in days}
@@ -866,7 +858,7 @@ async def test_calendar(target_date: datetime | None = None, headless: bool = Fa
         print(f"  {d.strftime('%a %d %b')}: {comment}")
 
 
-async def preview_week(browser: Browser, target_date: datetime | None = None, headless: bool = False):
+async def preview_week(browser: Browser, target_date: datetime | None = None, headless: bool = False, pre_cal: dict | None = None):
     """Show what create_week would submit without saving anything."""
     date     = target_date or datetime.today()
     week_end = week_ending_for(date)
@@ -880,7 +872,7 @@ async def preview_week(browser: Browser, target_date: datetime | None = None, he
 
     cal_events: dict[str, list[str]] = {}
     if USE_CALENDAR:
-        cal_events = await fetch_outlook_calendar(browser, days, headless=headless)
+        cal_events = pre_cal if pre_cal is not None else await fetch_outlook_calendar(browser, days, headless=headless)
 
     claude_projects = {fmt(d): get_claude_projects_for_date(d) for d in days}
     git_work        = {fmt(d): get_git_work_for_date(d) for d in days}
@@ -918,10 +910,20 @@ async def run(headless: bool, command: str, target: datetime | None):
             await test_calendar(target, headless=False)
         return
 
-    session_state = json.loads(SESSION_FILE.read_text()) if SESSION_FILE.exists() else None
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=headless)
+
+        # ── Outlook calendar first (so login order is Outlook → S-Cubed) ──
+        pre_cal: dict | None = None
+        if command in ("create", "preview") and USE_CALENDAR:
+            date     = target or datetime.today()
+            week_end = week_ending_for(date)
+            days     = working_days(week_end)
+            pre_cal  = await fetch_outlook_calendar(browser, days, headless=headless)
+            # AuthRequired propagates to main() which retries with headless=False
+
+        # ── S-Cubed ────────────────────────────────────────────────────────
+        session_state = json.loads(SESSION_FILE.read_text()) if SESSION_FILE.exists() else None
         context = await browser.new_context(storage_state=session_state)
         page    = await context.new_page()
 
@@ -937,9 +939,9 @@ async def run(headless: bool, command: str, target: datetime | None):
         elif command == "discover":
             await discover_ids(page, save=True)
         elif command == "create":
-            await create_week(page, browser, target, headless=headless)
+            await create_week(page, browser, target, headless=headless, pre_cal=pre_cal)
         elif command == "preview":
-            await preview_week(browser, target, headless=headless)
+            await preview_week(browser, target, headless=headless, pre_cal=pre_cal)
         else:
             print(f"Unknown command: {command}")
             print("Usage:  python timesheet_bot.py [discover_all | discover | create | preview | test-calendar [YYYY-MM-DD]]")
