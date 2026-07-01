@@ -120,15 +120,21 @@ class TimesheetApp:
 
         def worker():
             try:
-                # In a frozen PyInstaller bundle the driver lives in _MEIPASS
+                # In a frozen PyInstaller bundle the driver lives in _MEIPASS.
+                # There's no standalone "playwright" launcher script — the
+                # driver is invoked as `node cli.js ...`.
                 if getattr(sys, 'frozen', False):
-                    driver = Path(sys._MEIPASS) / 'playwright' / 'driver' / 'playwright'
+                    driver_root = Path(sys._MEIPASS) / 'playwright' / 'driver'
+                    node = driver_root / ('node.exe' if sys.platform == 'win32' else 'node')
+                    cli = driver_root / 'package' / 'cli.js'
+                    cmd = [str(node), str(cli), 'install', 'chromium']
                 else:
                     from playwright._impl._driver import compute_driver_executable
-                    driver = Path(compute_driver_executable())
+                    node, cli = compute_driver_executable()
+                    cmd = [node, cli, 'install', 'chromium']
 
                 result = subprocess.run(
-                    [str(driver), 'install', 'chromium'],
+                    cmd,
                     capture_output=True, text=True,
                 )
                 if result.returncode == 0:
