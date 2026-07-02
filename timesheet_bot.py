@@ -30,16 +30,25 @@ from playwright.async_api import async_playwright, Page, BrowserContext, Browser
 class AuthRequired(Exception):
     """Raised when a login page is detected in headless mode."""
 
-load_dotenv()
+# In a frozen PyInstaller build, __file__ resolves inside the onefile temp
+# extraction dir (e.g. _MEI*), which is wiped when the process exits. Session,
+# catalog, mappings and .env must live somewhere persistent instead.
+if getattr(sys, 'frozen', False):
+    APP_DATA_DIR = Path.home() / ".scubed-timesheet"
+    APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+else:
+    APP_DATA_DIR = Path(__file__).parent
+
+load_dotenv(dotenv_path=APP_DATA_DIR / ".env")
 
 BASE_URL   = "https://dcxconnect.datacentrix.co.za/SCUBED"
 API_BASE   = f"{BASE_URL}/pages/tlc_api/Timesheet_Entries.aspx"
 LOGIN_URL  = f"{BASE_URL}/scubed.aspx"
-SESSION_FILE         = Path(__file__).parent / "session.json"
-OUTLOOK_SESSION_FILE = Path(__file__).parent / "outlook_session.json"
+SESSION_FILE         = APP_DATA_DIR / "session.json"
+OUTLOOK_SESSION_FILE = APP_DATA_DIR / "outlook_session.json"
 CLAUDE_HISTORY_FILE  = Path.home() / ".claude" / "history.jsonl"
-CATALOG_FILE         = Path(__file__).parent / "client_catalog.json"
-MAPPINGS_FILE        = Path(__file__).parent / "project_mappings.json"
+CATALOG_FILE         = APP_DATA_DIR / "client_catalog.json"
+MAPPINGS_FILE        = APP_DATA_DIR / "project_mappings.json"
 
 # ── Config from .env ──────────────────────────────────────────────────────────
 CLIENT_ID      = int(os.environ["CLIENT_ID"])      if os.getenv("CLIENT_ID")      else None
@@ -57,7 +66,7 @@ WORK_DIR       = Path(os.getenv("WORK_DIR", ".")).resolve()
 
 INSERT_TIMESTAMP = "AAAAAAAH954="  # constant the site uses for new entries
 
-ENV_FILE = Path(__file__).parent / ".env"
+ENV_FILE = APP_DATA_DIR / ".env"
 
 
 def ids_configured() -> bool:
@@ -436,7 +445,11 @@ async def login(context: BrowserContext, page: Page, headless: bool = False) -> 
         raise AuthRequired("S-Cubed login required")
 
     print("S-Cubed: please complete login/2FA in the browser window…")
-    await page.wait_for_url(re.compile(r"dcxconnect.*scubed", re.IGNORECASE), timeout=300000)
+    # Don't wait on a URL regex — the login page and the logged-in dashboard
+    # are both under .../scubed.aspx, so a URL match can be trivially true
+    # before the user has actually logged in. Wait for the real dashboard
+    # elements instead (same signal the "already logged in" check above uses).
+    await page.locator("#nav_weeks, #ifrm").first.wait_for(state="attached", timeout=300000)
     await page.wait_for_timeout(1000)
 
     print("Login successful.")
@@ -893,6 +906,11 @@ async def preview_week(browser: Browser, target_date: datetime | None = None, he
 
     catalog  = load_catalog()
     mappings = load_mappings()
+
+    if not (catalog and mappings) and not ids_configured():
+        print("⚠️  No client_catalog.json/project_mappings.json and no CLIENT_ID in .env.")
+        print("   Run 'First-time Setup' (or `python timesheet_bot.py discover_all`) first —")
+        print("   client/project below will show as None until that's done.\n")
 
     print(f"Preview for week ending {fmt(week_end)}")
     print(f"  Days: {', '.join(d.strftime('%a %d %b') for d in days)}")
