@@ -29,6 +29,17 @@ from timesheet_bot import (
 )
 
 
+def _default_playwright_browsers_dir() -> Path:
+    """Playwright's own default cache dir when PLAYWRIGHT_BROWSERS_PATH isn't set."""
+    if sys.platform == 'win32':
+        base = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
+    elif sys.platform == 'darwin':
+        base = Path.home() / 'Library' / 'Caches'
+    else:
+        base = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache'))
+    return base / 'ms-playwright'
+
+
 class RedirectText(io.StringIO):
     """Captures print() output and forwards it to a callback on the main thread."""
 
@@ -109,7 +120,10 @@ class TimesheetApp:
 
     def _ensure_browser(self):
         """Install Playwright Chromium if missing. Blocks buttons until done."""
-        browser_path = Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH', Path.home() / '.ms-playwright'))
+        # Frozen builds set PLAYWRIGHT_BROWSERS_PATH explicitly (see top of file).
+        # Source runs don't, so fall back to Playwright's actual per-OS cache dir —
+        # not the frozen-build path — otherwise this reinstalls Chromium every launch.
+        browser_path = Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH') or _default_playwright_browsers_dir())
         # Check if any chromium_headless_shell directory already exists
         existing = list(browser_path.glob('chromium_headless_shell-*'))
         if existing:

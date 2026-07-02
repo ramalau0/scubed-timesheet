@@ -93,13 +93,21 @@ def resolve_project_ids(repo_name: str, catalog: dict, mappings: dict) -> dict |
             break
 
     client = next((c for c in catalog["clients"] if c["id"] == client_id), None)
-    if client is None and catalog["clients"]:
-        client = catalog["clients"][0]
+    if client is None:
+        if client_id is not None:
+            # A mapping/default pointed at a client_id that's no longer in the
+            # catalog (stale after re-discovery) — don't silently bill a
+            # different client instead.
+            return None
+        if catalog["clients"]:
+            client = catalog["clients"][0]
     if client is None or not client["projects"]:
         return None
 
     if project_id:
-        project = next((p for p in client["projects"] if p["id"] == project_id), client["projects"][0])
+        project = next((p for p in client["projects"] if p["id"] == project_id), None)
+        if project is None:
+            return None
     else:
         project = client["projects"][0]
 
@@ -205,8 +213,20 @@ def get_claude_projects_for_date(target_date: datetime) -> list[str]:
     return sorted(projects)
 
 
+def _git_author_email(repo: Path) -> str | None:
+    """Resolve the commit author email for this repo (local override, else global)."""
+    try:
+        out = subprocess.check_output(
+            ["git", "config", "--get", "user.email"],
+            cwd=repo, text=True, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        return out.strip() or None
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+
 def get_git_work_for_date(target_date: datetime) -> dict[str, list[str]]:
-    """Return {repo_name: [commit_subject, ...]} for repos under WORK_DIR with commits on target_date."""
+    """Return {repo_name: [commit_subject, ...]} for repos under WORK_DIR with commits on target_date, authored by the current user."""
     date_str = target_date.strftime("%Y-%m-%d")
     result: dict[str, list[str]] = {}
     try:
@@ -214,13 +234,16 @@ def get_git_work_for_date(target_date: datetime) -> dict[str, list[str]]:
             if not (repo / ".git").exists():
                 continue
             try:
+                author = _git_author_email(repo)
+                cmd = [
+                    "git", "log", "--format=%s",
+                    f"--since={date_str} 00:00:00",
+                    f"--until={date_str} 23:59:59",
+                ]
+                if author:
+                    cmd.append(f"--author={author}")
                 out = subprocess.check_output(
-                    [
-                        "git", "log", "--format=%s",
-                        f"--since={date_str} 00:00:00",
-                        f"--until={date_str} 23:59:59",
-                    ],
-                    cwd=repo, text=True, stderr=subprocess.DEVNULL, timeout=5,
+                    cmd, cwd=repo, text=True, stderr=subprocess.DEVNULL, timeout=5,
                 )
                 msgs = [m.strip() for m in out.splitlines() if m.strip()]
                 if msgs:
@@ -482,7 +505,9 @@ def _pick(label: str, options: list[dict]) -> dict:
             choice = int(input(f"  Pick {label} [1-{len(options)}]: "))
             if 1 <= choice <= len(options):
                 return options[choice - 1]
-        except (ValueError, EOFError):
+        except EOFError:
+            raise RuntimeError(f"No input available to pick {label} — run this command in an interactive terminal.")
+        except ValueError:
             pass
 
 

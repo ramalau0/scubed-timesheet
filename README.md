@@ -35,14 +35,7 @@ playwright install chromium
 cp .env.example .env
 ```
 
-Open `.env` and fill in your credentials:
-
-```env
-SCUBED_USERNAME=yourname@datacentrix.co.za
-SCUBED_PASSWORD=your_password
-```
-
-Leave the IDs blank for now — the `discover` command will find them.
+Leave the IDs blank for now — the `discover` command will find them. There's no username/password to set: the first run opens a browser window for you to complete login and 2FA manually, and the session is cached after that (see [Browser behaviour](#browser-behaviour)).
 
 **3. Discover your IDs**
 
@@ -68,11 +61,13 @@ The first time you run `create`, a browser will open for Outlook. Log in with yo
 
 ## Usage
 
-**Create this week's timesheet:**
+**Create the most recently completed week's timesheet:**
 
 ```bash
 python timesheet_bot.py create
 ```
+
+`create` never targets a week that hasn't finished yet — it always fills Mon–Fri of the most recent week that has already ended (relative to today), even if you run it mid-week. Run it on or after the Monday following the week you want to log.
 
 **Create for a specific past week (any date in that week):**
 
@@ -107,8 +102,6 @@ If nothing is found for a day it falls back to the `WEEKLY_COMMENT` value in `.e
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SCUBED_USERNAME` | Yes | — | Your `@datacentrix.co.za` email |
-| `SCUBED_PASSWORD` | Yes | — | Your S-Cubed password |
 | `EMPLOYEE_ID` | Yes | — | Run `discover` to find this |
 | `CLIENT_ID` | Yes | — | Run `discover` to find this |
 | `PROJECT_ID` | Yes | — | Run `discover` to find this |
@@ -133,7 +126,9 @@ If nothing is found for a day it falls back to the `WEEKLY_COMMENT` value in `.e
 
 ## Automating with cron
 
-To run every Friday at 4pm:
+`create` always fills the most recently *completed* week (Mon–Sun), never the one still in progress. Schedule **only one** cron job — running two on the same calendar week will both resolve to the same target week and create duplicate entries, since there's no dedup check yet.
+
+`cron_weekly.sh` in this repo runs every Monday at 08:00, logging the week that ended the day before:
 
 ```bash
 crontab -e
@@ -142,5 +137,11 @@ crontab -e
 Add:
 
 ```
-0 16 * * 5 cd /path/to/scubed-timesheet && .venv/bin/python timesheet_bot.py create
+0 8 * * 1 /path/to/scubed-timesheet/cron_weekly.sh
+```
+
+Prefer Friday afternoon instead? Use the same script/command on a Friday schedule — it logs the same "most recently completed week" either way — just don't run both schedules at once:
+
+```
+0 16 * * 5 /path/to/scubed-timesheet/cron_weekly.sh
 ```
