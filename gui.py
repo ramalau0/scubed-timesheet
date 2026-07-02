@@ -68,10 +68,10 @@ class TimesheetApp:
 
         self._build_ui()
         self._refresh_status()
-        # On Mac/Linux: install Chromium before allowing any actions (Windows uses system Edge)
-        if sys.platform != "win32":
-            self._set_busy(True)
-            self.root.after(200, self._ensure_browser)
+        # Install Playwright's bundled Chromium before allowing any actions, on
+        # every platform (system browser channels proved unreliable — see _launch()).
+        self._set_busy(True)
+        self.root.after(200, self._ensure_browser)
 
     def _build_ui(self):
         outer = ttk.Frame(self.root, padding=16)

@@ -918,13 +918,14 @@ async def submit_entries(iframe, entry_ids: list[int]):
 
 
 async def _launch(p, headless: bool):
-    """Launch the right browser for this platform. Windows prefers system Chrome
-    (falls back to Edge if Chrome isn't installed) so no download is needed either way."""
-    if sys.platform == "win32":
-        try:
-            return await p.chromium.launch(channel="chrome", headless=headless)
-        except Exception:
-            return await p.chromium.launch(channel="msedge", headless=headless)
+    """Launch Playwright's own bundled Chromium on every platform.
+    Driving an already-installed system browser (via channel="msedge"/"chrome")
+    means whatever version happens to be on that machine, which isn't guaranteed
+    to match what this Playwright release's injected automation script expects —
+    confirmed by a real TypeError inside Playwright's own SelectorEvaluatorImpl
+    on a pilot's Chrome build. The bundled Chromium is tested and shipped
+    together with each Playwright release, so this avoids that whole class of
+    mismatch, at the cost of a one-time download (see gui.py's _ensure_browser)."""
     return await p.chromium.launch(headless=headless)
 
 
