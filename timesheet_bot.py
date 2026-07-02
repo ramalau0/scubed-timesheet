@@ -49,6 +49,7 @@ OUTLOOK_SESSION_FILE = APP_DATA_DIR / "outlook_session.json"
 CLAUDE_HISTORY_FILE  = Path.home() / ".claude" / "history.jsonl"
 CATALOG_FILE         = APP_DATA_DIR / "client_catalog.json"
 MAPPINGS_FILE        = APP_DATA_DIR / "project_mappings.json"
+SUBMITTED_LEDGER_FILE = APP_DATA_DIR / "submitted_weeks.json"
 
 # ── Config from .env ──────────────────────────────────────────────────────────
 CLIENT_ID      = int(os.environ["CLIENT_ID"])      if os.getenv("CLIENT_ID")      else None
@@ -79,6 +80,20 @@ def load_catalog() -> dict | None:
 
 def load_mappings() -> dict | None:
     return json.loads(MAPPINGS_FILE.read_text()) if MAPPINGS_FILE.exists() else None
+
+
+def _load_submitted_weeks() -> dict:
+    return json.loads(SUBMITTED_LEDGER_FILE.read_text()) if SUBMITTED_LEDGER_FILE.exists() else {}
+
+
+def _record_submitted_week(week_key: str, entry_ids: list[int]):
+    """Record a successful save so a later re-run of the same week is caught locally.
+    This is a same-machine ledger only — it can't see entries created via the S-Cubed
+    web UI directly or from another machine, since there's no verified API to list
+    existing server-side entries (see REVIEW-batch-save-api-failure.md)."""
+    ledger = _load_submitted_weeks()
+    ledger[week_key] = {"entry_ids": entry_ids, "saved_at": datetime.now().isoformat(timespec="seconds")}
+    SUBMITTED_LEDGER_FILE.write_text(json.dumps(ledger, indent=2))
 
 
 def resolve_project_ids(repo_name: str, catalog: dict, mappings: dict) -> dict | None:
@@ -129,7 +144,7 @@ def split_hours(total: float, n: int) -> list[float]:
 
 def write_env(updates: dict[str, str]):
     """Update key=value pairs in .env and reload the module globals."""
-    global CLIENT_ID, PROJECT_ID, ACTIVITY_ID, DESIGNATION_ID, EMPLOYEE_ID, ENTITY_ID
+    global CLIENT_ID, PROJECT_ID, ACTIVITY_ID, DESIGNATION_ID, EMPLOYEE_ID, ENTITY_ID, WORK_DIR
 
     # Create .env from example if it doesn't exist yet
     if not ENV_FILE.exists():
@@ -161,6 +176,7 @@ def write_env(updates: dict[str, str]):
     DESIGNATION_ID = int(os.environ["DESIGNATION_ID"]) if os.getenv("DESIGNATION_ID") else None
     EMPLOYEE_ID    = int(os.environ["EMPLOYEE_ID"])    if os.getenv("EMPLOYEE_ID")    else None
     ENTITY_ID      = int(os.getenv("ENTITY_ID", "1"))
+    WORK_DIR       = Path(os.getenv("WORK_DIR", ".")).resolve()
 
 
 # ── Date helpers ───────────────────────────────────────────────────────────────
@@ -737,6 +753,17 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
     date     = target_date or datetime.today()
     week_end = week_ending_for(date)
     days     = working_days(week_end)
+    week_key = fmt(week_end)
+
+    ledger = _load_submitted_weeks()
+    if week_key in ledger:
+        prev = ledger[week_key]
+        print(f"⚠️  Week ending {week_key} was already saved from this machine on {prev.get('saved_at', '?')} "
+              f"(entry IDs: {prev.get('entry_ids')}). Skipping to avoid duplicate entries.")
+        print(f"   Note: this only catches re-runs from this machine — it can't see entries created")
+        print(f"   directly in the S-Cubed web UI or from another machine.")
+        print(f"   To re-submit anyway, remove the \"{week_key}\" entry from {SUBMITTED_LEDGER_FILE.name}.")
+        return
 
     catalog  = load_catalog()
     mappings = load_mappings()
@@ -840,10 +867,14 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
     if status == 200 and body and body.get("d") is not None:
         ids = [e.get("Timesheet_EntryID") for e in (body["d"] or [])]
         print(f"\n✅ Saved {len(ids)} entries  (IDs: {ids})")
+        _record_submitted_week(week_key, ids)
         if SUBMIT_AFTER_SAVE and ids:
             await submit_entries(iframe, ids)
     else:
         print(f"\n❌ Save failed (HTTP {status}): {json.dumps(body or result.get('raw', ''))[:500]}")
+        if isinstance(body, dict) and "error processing the request" in (body.get("Message") or "").lower():
+            print("   This generic error has previously shown up when entries already exist")
+            print(f"   for week ending {week_key} — check S-Cubed's timesheet grid manually before retrying.")
         print(f"\n── Request payload (for debugging) ──")
         for i, entry in enumerate(new_entries):
             print(f"  Entry {i}: date={entry['EntryDate']} hours={entry['Hours']} "

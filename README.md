@@ -112,7 +112,7 @@ If nothing is found for a day it falls back to the `WEEKLY_COMMENT` value in `.e
 | `WEEKLY_COMMENT` | No | `Regular weekly hours` | Fallback comment when no data found |
 | `SUBMIT_AFTER_SAVE` | No | `false` | Set to `true` to auto-submit for approval |
 | `USE_CALENDAR` | No | `true` | Set to `false` to skip Outlook and use Claude history only |
-| `WORK_DIR` | No | `./` | Path to your work projects folder for Claude history matching. Place the script in your work root, or set this explicitly. |
+| `WORK_DIR` | No | `./` | Path to your work projects folder for Claude history matching. Place the script in your work root, set this explicitly, or use "Change…" next to the work folder label in the desktop GUI. |
 
 ---
 
@@ -124,9 +124,15 @@ If nothing is found for a day it falls back to the `WEEKLY_COMMENT` value in `.e
 
 ---
 
+## Duplicate-entry protection
+
+Before saving, `create` checks `submitted_weeks.json` for a prior successful save of the same week and skips with a warning if found. **This only catches re-runs from the same machine** — there's no verified S-Cubed API to list entries already created directly in the web UI or from another machine, so it can't detect those. If a save still fails with S-Cubed's generic "error processing the request" message, that has previously indicated the week already had entries — check the S-Cubed grid manually.
+
+---
+
 ## Automating with cron
 
-`create` always fills the most recently *completed* week (Mon–Sun), never the one still in progress. Schedule **only one** cron job — running two on the same calendar week will both resolve to the same target week and create duplicate entries, since there's no dedup check yet.
+`create` always fills the most recently *completed* week (Mon–Sun), never the one still in progress. Schedule **only one** cron job — running two on the same calendar week will both resolve to the same target week; the local duplicate check above will catch a second run on the same machine, but not one from a different machine.
 
 `cron_weekly.sh` in this repo runs every Monday at 08:00, logging the week that ended the day before:
 

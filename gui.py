@@ -10,7 +10,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import scrolledtext, ttk
+from tkinter import filedialog, scrolledtext, ttk
 from datetime import datetime
 
 # When packaged with PyInstaller, redirect Playwright's browser lookup to a
@@ -18,6 +18,7 @@ from datetime import datetime
 if getattr(sys, 'frozen', False) and 'PLAYWRIGHT_BROWSERS_PATH' not in os.environ:
     os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(Path.home() / '.ms-playwright')
 
+import timesheet_bot
 from timesheet_bot import (
     AuthRequired,
     ids_configured,
@@ -25,6 +26,7 @@ from timesheet_bot import (
     run,
     week_ending_for,
     working_days,
+    write_env,
     EMPLOYEE_ID,
 )
 
@@ -81,7 +83,15 @@ class TimesheetApp:
         week_end = week_ending_for(today)
         days = working_days(week_end)
         week_label = f"Week:  {days[0].strftime('%a %d %b')} – {days[-1].strftime('%a %d %b %Y')}"
-        ttk.Label(outer, text=week_label, foreground="gray").pack(anchor="w", pady=(4, 14))
+        ttk.Label(outer, text=week_label, foreground="gray").pack(anchor="w", pady=(4, 8))
+
+        # Work folder — used to match git/Claude CLI history to today's entries
+        workdir_row = ttk.Frame(outer)
+        workdir_row.pack(fill=tk.X, pady=(0, 14))
+        self.workdir_var = tk.StringVar()
+        ttk.Label(workdir_row, textvariable=self.workdir_var, foreground="gray").pack(side=tk.LEFT)
+        ttk.Button(workdir_row, text="Change…", width=10, command=self._on_change_workdir).pack(side=tk.RIGHT)
+        self._refresh_workdir_label()
 
         # Buttons
         btn_row = ttk.Frame(outer)
@@ -105,6 +115,20 @@ class TimesheetApp:
             outer, height=20, font=("Courier", 9), state=tk.DISABLED, wrap=tk.WORD
         )
         self.log.pack(fill=tk.BOTH, expand=True)
+
+    # ── Work folder ───────────────────────────────────────────────────────────
+
+    def _refresh_workdir_label(self):
+        self.workdir_var.set(f"Work folder:  {timesheet_bot.WORK_DIR}")
+
+    def _on_change_workdir(self):
+        chosen = filedialog.askdirectory(
+            title="Select your work projects folder",
+            initialdir=str(timesheet_bot.WORK_DIR),
+        )
+        if chosen:
+            write_env({"WORK_DIR": chosen})
+            self._refresh_workdir_label()
 
     # ── Status ────────────────────────────────────────────────────────────────
 

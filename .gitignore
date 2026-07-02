@@ -7,6 +7,7 @@ session.json
 outlook_session.json
 client_catalog.json
 project_mappings.json
+submitted_weeks.json
 
 # Build artifacts
 dist/
