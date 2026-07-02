@@ -918,9 +918,13 @@ async def submit_entries(iframe, entry_ids: list[int]):
 
 
 async def _launch(p, headless: bool):
-    """Launch the right browser for this platform. Windows uses system Edge so no download is needed."""
+    """Launch the right browser for this platform. Windows prefers system Chrome
+    (falls back to Edge if Chrome isn't installed) so no download is needed either way."""
     if sys.platform == "win32":
-        return await p.chromium.launch(channel="msedge", headless=headless)
+        try:
+            return await p.chromium.launch(channel="chrome", headless=headless)
+        except Exception:
+            return await p.chromium.launch(channel="msedge", headless=headless)
     return await p.chromium.launch(headless=headless)
 
 
