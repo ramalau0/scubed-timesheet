@@ -484,11 +484,16 @@ async def login(context: BrowserContext, page: Page, headless: bool = False) -> 
         raise AuthRequired("S-Cubed login required")
 
     print("S-Cubed: please complete login/2FA in the browser window…")
-    # Don't wait on a URL regex — the login page and the logged-in dashboard
-    # are both under .../scubed.aspx, so a URL match can be trivially true
-    # before the user has actually logged in. Wait for the real dashboard
-    # elements instead (same signal the "already logged in" check above uses).
-    await page.locator("#nav_weeks, #ifrm").first.wait_for(state="attached", timeout=300000)
+    # Match the exact same signal as the "already logged in" check above (URL AND
+    # dashboard element). Checking the element alone can false-positive on an
+    # intermediate page during the multi-hop SSO redirect (Microsoft -> Okta ->
+    # back to scubed.aspx), reporting success before the browser has actually
+    # landed back on the dashboard.
+    await page.wait_for_function(
+        "() => location.href.includes('/scubed.aspx') && "
+        "(document.querySelector('#nav_weeks') || document.querySelector('#ifrm'))",
+        timeout=300000,
+    )
     await page.wait_for_timeout(1000)
 
     print("Login successful.")
