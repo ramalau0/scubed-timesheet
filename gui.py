@@ -10,7 +10,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 from datetime import datetime
 
 # When packaged with PyInstaller, redirect Playwright's browser lookup to a
@@ -63,6 +63,8 @@ class TimesheetApp:
         self.root.title("S-Cubed Timesheet")
         self.root.geometry("640x520")
         self.root.resizable(False, False)
+        self._busy = False
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
 
         self._build_ui()
         self._refresh_status()
@@ -202,6 +204,7 @@ class TimesheetApp:
     # ── Button state ──────────────────────────────────────────────────────────
 
     def _set_busy(self, busy: bool):
+        self._busy = busy
         state = tk.DISABLED if busy else tk.NORMAL
         for btn in (self.btn_preview, self.btn_submit, self.btn_setup):
             btn.configure(state=state)
@@ -209,6 +212,20 @@ class TimesheetApp:
             self.progress.start(12)
         else:
             self.progress.stop()
+
+    def _on_close_request(self):
+        """Closing the main window while a task is running kills the background
+        worker thread immediately (it's a daemon thread) — including any browser
+        window still waiting on you to log in. Warn instead of closing silently."""
+        if self._busy:
+            if not messagebox.askyesno(
+                "Quit while busy?",
+                "A task is still running — possibly a browser window waiting for "
+                "you to log in. Quitting now will close that browser too.\n\n"
+                "Quit anyway?",
+            ):
+                return
+        self.root.destroy()
 
     # ── Command runner ────────────────────────────────────────────────────────
 

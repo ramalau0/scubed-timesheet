@@ -319,6 +319,9 @@ async def fetch_outlook_calendar(browser: Browser, week_dates: list[datetime], h
                 await ctx.close()
                 raise AuthRequired("Outlook sign-in required")
             print("Outlook: please log in in the browser window…")
+            print("   (a browser window has opened — check your taskbar if you don't see it;")
+            print("    don't close this app until login finishes, it will stop the browser)")
+            await page.bring_to_front()
             await page.wait_for_function(
                 "() => window.location.hostname === 'outlook.office.com'",
                 timeout=300000,
@@ -484,6 +487,9 @@ async def login(context: BrowserContext, page: Page, headless: bool = False) -> 
         raise AuthRequired("S-Cubed login required")
 
     print("S-Cubed: please complete login/2FA in the browser window…")
+    print("   (a browser window has opened — check your taskbar if you don't see it;")
+    print("    don't close this app until login finishes, it will stop the browser)")
+    await page.bring_to_front()
     # Match the exact same signal as the "already logged in" check above (URL AND
     # dashboard element). Checking the element alone can false-positive on an
     # intermediate page during the multi-hop SSO redirect (Microsoft -> Okta ->
