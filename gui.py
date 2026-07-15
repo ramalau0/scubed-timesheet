@@ -61,15 +61,14 @@ class TimesheetApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("S-Cubed Timesheet")
-        self.root.geometry("640x520")
-        self.root.resizable(False, False)
+        self.root.geometry("720x680")
+        self.root.resizable(True, True)
+        self.root.minsize(600, 500)
         self._busy = False
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
 
         self._build_ui()
         self._refresh_status()
-        # Install Playwright's bundled Chromium before allowing any actions, on
-        # every platform (system browser channels proved unreliable — see _launch()).
         self._set_busy(True)
         self.root.after(200, self._ensure_browser)
 
@@ -77,51 +76,152 @@ class TimesheetApp:
         outer = ttk.Frame(self.root, padding=16)
         outer.pack(fill=tk.BOTH, expand=True)
 
-        # Status + week info
-        self.status_var = tk.StringVar()
-        ttk.Label(outer, textvariable=self.status_var, font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+        # ── Title & instructions ─────────────────────────────────────────
+        title_frame = ttk.Frame(outer)
+        title_frame.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(title_frame, text="S-Cubed Timesheet Assistant",
+                  font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
 
+        instructions = (
+            "This tool creates draft timesheet entries on S-Cubed from your "
+            "Outlook calendar and git history. Drafts are saved but NOT "
+            "submitted for approval — you must review and submit them "
+            "yourself in S-Cubed."
+        )
+        instr_label = ttk.Label(outer, text=instructions, wraplength=680,
+                                foreground="gray", justify=tk.LEFT)
+        instr_label.pack(anchor="w", pady=(0, 10))
+
+        # ── Status ───────────────────────────────────────────────────────
+        self.status_var = tk.StringVar()
+        ttk.Label(outer, textvariable=self.status_var,
+                  font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+
+        # ── Week info ────────────────────────────────────────────────────
         today = datetime.today()
         week_end = week_ending_for(today)
         days = working_days(week_end)
-        week_label = f"Week:  {days[0].strftime('%a %d %b')} – {days[-1].strftime('%a %d %b %Y')}"
-        ttk.Label(outer, text=week_label, foreground="gray").pack(anchor="w", pady=(4, 8))
+        week_label = (f"Current week:  {days[0].strftime('%a %d %b')} – "
+                      f"{days[-1].strftime('%a %d %b %Y')}")
+        ttk.Label(outer, text=week_label, foreground="gray").pack(
+            anchor="w", pady=(4, 8))
 
-        # Work folder — used to match git/Claude CLI history to today's entries
-        workdir_row = ttk.Frame(outer)
-        workdir_row.pack(fill=tk.X, pady=(0, 14))
+        # ── Settings section ─────────────────────────────────────────────
+        settings_frame = ttk.LabelFrame(outer, text="Settings", padding=8)
+        settings_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # Employee ID row
+        emp_row = ttk.Frame(settings_frame)
+        emp_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(emp_row, text="Employee ID:").pack(side=tk.LEFT)
+        self.emp_var = tk.StringVar(
+            value=str(EMPLOYEE_ID) if EMPLOYEE_ID else "")
+        self.emp_entry = ttk.Entry(emp_row, textvariable=self.emp_var, width=12)
+        self.emp_entry.pack(side=tk.LEFT, padx=(8, 4))
+        ttk.Button(emp_row, text="Save", width=6,
+                   command=self._on_save_employee_id).pack(side=tk.LEFT)
+        emp_hint = ("Auto-detected during setup. If S-Cubed shows the wrong "
+                    "name on your timesheets, correct this number here.")
+        ttk.Label(emp_row, text=emp_hint, foreground="gray",
+                  wraplength=380, justify=tk.LEFT).pack(
+                      side=tk.LEFT, padx=(8, 0))
+
+        # Work folder row
+        workdir_row = ttk.Frame(settings_frame)
+        workdir_row.pack(fill=tk.X, pady=(0, 0))
         self.workdir_var = tk.StringVar()
-        ttk.Label(workdir_row, textvariable=self.workdir_var, foreground="gray").pack(side=tk.LEFT)
-        ttk.Button(workdir_row, text="Change…", width=10, command=self._on_change_workdir).pack(side=tk.RIGHT)
+        ttk.Label(workdir_row, text="Work folder:").pack(side=tk.LEFT)
+        ttk.Label(workdir_row, textvariable=self.workdir_var,
+                  foreground="gray").pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(workdir_row, text="Change...", width=10,
+                   command=self._on_change_workdir).pack(side=tk.RIGHT)
         self._refresh_workdir_label()
 
-        # Buttons
-        btn_row = ttk.Frame(outer)
-        btn_row.pack(fill=tk.X, pady=(0, 12))
+        # ── How to use section ───────────────────────────────────────────
+        steps_frame = ttk.LabelFrame(outer, text="How to use", padding=8)
+        steps_frame.pack(fill=tk.X, pady=(0, 10))
 
-        self.btn_preview = ttk.Button(btn_row, text="Preview", width=14, command=self._on_preview)
+        steps = [
+            ("Step 1 — First-time Setup",
+             "Run once to discover your employee ID, clients, and projects "
+             "from S-Cubed. A browser window will open for you to log in."),
+            ("Step 2 — Preview",
+             "See what your timesheet entries will look like before saving. "
+             "Shows calendar events, hours, and comments for each day."),
+            ("Step 3 — Save Draft",
+             "Creates draft entries on S-Cubed for the current week. "
+             "Does NOT submit for approval — review in S-Cubed first."),
+        ]
+        for title, desc in steps:
+            step_frame = ttk.Frame(steps_frame)
+            step_frame.pack(fill=tk.X, pady=(0, 4))
+            ttk.Label(step_frame, text=title,
+                      font=("TkDefaultFont", 9, "bold")).pack(anchor="w")
+            ttk.Label(step_frame, text=desc, foreground="gray",
+                      wraplength=660, justify=tk.LEFT).pack(
+                          anchor="w", padx=(16, 0))
+
+        # ── Action buttons ───────────────────────────────────────────────
+        btn_row = ttk.Frame(outer)
+        btn_row.pack(fill=tk.X, pady=(0, 8))
+
+        self.btn_setup = ttk.Button(
+            btn_row, text="1. First-time Setup", width=20,
+            command=self._on_setup)
+        self.btn_setup.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.btn_preview = ttk.Button(
+            btn_row, text="2. Preview", width=14,
+            command=self._on_preview)
         self.btn_preview.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.btn_submit = ttk.Button(btn_row, text="Submit Timesheet", width=18, command=self._on_submit)
-        self.btn_submit.pack(side=tk.LEFT, padx=(0, 8))
+        self.btn_submit = ttk.Button(
+            btn_row, text="3. Save Draft", width=14,
+            command=self._on_submit)
+        self.btn_submit.pack(side=tk.LEFT)
 
-        self.btn_setup = ttk.Button(btn_row, text="First-time Setup", width=18, command=self._on_setup)
-        self.btn_setup.pack(side=tk.LEFT)
+        draft_note = ttk.Label(
+            outer,
+            text="Save Draft only creates entries — it does NOT submit "
+                 "them for manager approval.",
+            foreground="#b8860b", justify=tk.LEFT)
+        draft_note.pack(anchor="w", pady=(0, 6))
 
-        # Progress indicator
+        # ── Progress indicator ───────────────────────────────────────────
         self.progress = ttk.Progressbar(outer, mode="indeterminate")
-        self.progress.pack(fill=tk.X, pady=(0, 8))
+        self.progress.pack(fill=tk.X, pady=(0, 6))
 
-        # Log output
+        # ── Log output ───────────────────────────────────────────────────
+        log_label = ttk.Label(outer, text="Activity log:",
+                              font=("TkDefaultFont", 9, "bold"))
+        log_label.pack(anchor="w", pady=(0, 2))
         self.log = scrolledtext.ScrolledText(
-            outer, height=20, font=("Courier", 9), state=tk.DISABLED, wrap=tk.WORD
-        )
+            outer, height=14, font=("Courier", 9), state=tk.DISABLED,
+            wrap=tk.WORD)
         self.log.pack(fill=tk.BOTH, expand=True)
 
-    # ── Work folder ───────────────────────────────────────────────────────────
+    # ── Employee ID ──────────────────────────────────────────────────────
+
+    def _on_save_employee_id(self):
+        val = self.emp_var.get().strip()
+        if not val:
+            messagebox.showwarning("Employee ID",
+                                   "Please enter your employee ID number.")
+            return
+        try:
+            int(val)
+        except ValueError:
+            messagebox.showwarning("Employee ID",
+                                   "Employee ID must be a number.")
+            return
+        write_env({"EMPLOYEE_ID": val})
+        self._refresh_status()
+        self._append(f"Employee ID updated to {val}.")
+
+    # ── Work folder ──────────────────────────────────────────────────────
 
     def _refresh_workdir_label(self):
-        self.workdir_var.set(f"Work folder:  {timesheet_bot.WORK_DIR}")
+        self.workdir_var.set(str(timesheet_bot.WORK_DIR))
 
     def _on_change_workdir(self):
         chosen = filedialog.askdirectory(
@@ -132,63 +232,64 @@ class TimesheetApp:
             write_env({"WORK_DIR": chosen})
             self._refresh_workdir_label()
 
-    # ── Status ────────────────────────────────────────────────────────────────
+    # ── Status ───────────────────────────────────────────────────────────
 
     def _refresh_status(self):
+        emp_id = timesheet_bot.EMPLOYEE_ID
         catalog = load_catalog()
         if catalog or ids_configured():
-            emp = f"Employee {EMPLOYEE_ID}" if EMPLOYEE_ID else "catalog ready"
-            self.status_var.set(f"✅  Ready — {emp}")
+            emp = f"Employee {emp_id}" if emp_id else "catalog ready"
+            self.status_var.set(f"Ready — {emp}")
         else:
-            self.status_var.set("⚠️   Not configured — click First-time Setup")
+            self.status_var.set(
+                "Not configured — click First-time Setup to get started")
+        if emp_id:
+            self.emp_var.set(str(emp_id))
 
-    # ── Browser setup ─────────────────────────────────────────────────────────
+    # ── Browser setup ────────────────────────────────────────────────────
 
     def _ensure_browser(self):
         """Install Playwright Chromium if missing. Blocks buttons until done."""
-        # Frozen builds set PLAYWRIGHT_BROWSERS_PATH explicitly (see top of file).
-        # Source runs don't, so fall back to Playwright's actual per-OS cache dir —
-        # not the frozen-build path — otherwise this reinstalls Chromium every launch.
-        browser_path = Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH') or _default_playwright_browsers_dir())
-        # Check if any chromium_headless_shell directory already exists
+        browser_path = Path(
+            os.environ.get('PLAYWRIGHT_BROWSERS_PATH')
+            or _default_playwright_browsers_dir())
         existing = list(browser_path.glob('chromium_headless_shell-*'))
         if existing:
             self._set_busy(False)
             return
 
-        self._append("Installing browser (first time only, please wait)...")
+        self._append(
+            "Installing browser (first time only, please wait)...")
 
         def worker():
             try:
-                # In a frozen PyInstaller bundle the driver lives in _MEIPASS.
-                # There's no standalone "playwright" launcher script — the
-                # driver is invoked as `node cli.js ...`.
                 if getattr(sys, 'frozen', False):
-                    driver_root = Path(sys._MEIPASS) / 'playwright' / 'driver'
-                    node = driver_root / ('node.exe' if sys.platform == 'win32' else 'node')
+                    driver_root = (Path(sys._MEIPASS) / 'playwright'
+                                   / 'driver')
+                    node = driver_root / (
+                        'node.exe' if sys.platform == 'win32' else 'node')
                     cli = driver_root / 'package' / 'cli.js'
                     cmd = [str(node), str(cli), 'install', 'chromium']
                 else:
-                    from playwright._impl._driver import compute_driver_executable
+                    from playwright._impl._driver import (
+                        compute_driver_executable)
                     node, cli = compute_driver_executable()
                     cmd = [node, cli, 'install', 'chromium']
 
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True, text=True,
-                )
+                result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode == 0:
                     self._log_from_thread("Browser installed. Ready.")
                 else:
-                    self._log_from_thread(f"⚠️  Browser install failed:\n{result.stderr[:400]}")
+                    self._log_from_thread(
+                        f"Browser install failed:\n{result.stderr[:400]}")
             except Exception as exc:
-                self._log_from_thread(f"⚠️  Browser install error: {exc}")
+                self._log_from_thread(f"Browser install error: {exc}")
             finally:
                 self.root.after(0, lambda: self._set_busy(False))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # ── Log helpers ───────────────────────────────────────────────────────────
+    # ── Log helpers ──────────────────────────────────────────────────────
 
     def _append(self, text: str):
         """Append text to the log widget (must be called from main thread)."""
@@ -201,37 +302,37 @@ class TimesheetApp:
         """Thread-safe log append via Tkinter's after()."""
         self.root.after(0, lambda t=text: self._append(t))
 
-    # ── Button state ──────────────────────────────────────────────────────────
+    # ── Button state ─────────────────────────────────────────────────────
 
     def _set_busy(self, busy: bool):
         self._busy = busy
         state = tk.DISABLED if busy else tk.NORMAL
         for btn in (self.btn_preview, self.btn_submit, self.btn_setup):
             btn.configure(state=state)
+        self.emp_entry.configure(state=state)
         if busy:
             self.progress.start(12)
         else:
             self.progress.stop()
 
     def _on_close_request(self):
-        """Closing the main window while a task is running kills the background
-        worker thread immediately (it's a daemon thread) — including any browser
-        window still waiting on you to log in. Warn instead of closing silently."""
         if self._busy:
             if not messagebox.askyesno(
                 "Quit while busy?",
-                "A task is still running — possibly a browser window waiting for "
-                "you to log in. Quitting now will close that browser too.\n\n"
-                "Quit anyway?",
+                "A task is still running — possibly a browser window "
+                "waiting for you to log in. Quitting now will close "
+                "that browser too.\n\nQuit anyway?",
             ):
                 return
         self.root.destroy()
 
-    # ── Command runner ────────────────────────────────────────────────────────
+    # ── Command runner ───────────────────────────────────────────────────
 
     def _run(self, command: str):
         self._set_busy(True)
-        self._append(f"\n── {command.upper()} {'─' * (40 - len(command))}")
+        self._append(f"\n{'=' * 56}")
+        self._append(f"  {command.upper()}")
+        self._append(f"{'=' * 56}")
 
         def worker():
             redirect = RedirectText(self._log_from_thread)
@@ -239,11 +340,14 @@ class TimesheetApp:
             sys.stdout = redirect
             sys.stderr = redirect
             try:
-                asyncio.run(run(headless=True, command=command, target=None))
+                asyncio.run(
+                    run(headless=True, command=command, target=None))
             except AuthRequired as exc:
-                self._log_from_thread(f"[AUTH] {exc} — opening browser…")
+                self._log_from_thread(
+                    f"[AUTH] {exc} — opening browser for login...")
                 try:
-                    asyncio.run(run(headless=False, command=command, target=None))
+                    asyncio.run(
+                        run(headless=False, command=command, target=None))
                 except Exception as e2:
                     self._log_from_thread(f"Error: {e2}")
             except Exception as exc:
@@ -258,7 +362,7 @@ class TimesheetApp:
         self._set_busy(False)
         self._refresh_status()
 
-    # ── Button handlers ───────────────────────────────────────────────────────
+    # ── Button handlers ──────────────────────────────────────────────────
 
     def _on_preview(self):
         self._run("preview")

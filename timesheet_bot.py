@@ -441,8 +441,9 @@ def build_day_comment(cal_events: list[str], projects: list[str], git_work: dict
 
 # ── Timesheet entry ────────────────────────────────────────────────────────────
 
-def build_entry(date: datetime, hours: float, comment: str, client_id: int, project_id: int, activity_id: int, designation_id: int) -> dict:
+def build_entry(date: datetime, hours: float, comment: str, client_id: int, project_id: int, activity_id: int, designation_id: int, week_ending: datetime | None = None) -> dict:
     emp_id = EMPLOYEE_ID or (load_catalog() or {}).get("employee_id")
+    we = fmt(week_ending) if week_ending else None
     return {
         "Timesheet_EntryID": -1,
         "EmployeeID": emp_id,
@@ -450,7 +451,7 @@ def build_entry(date: datetime, hours: float, comment: str, client_id: int, proj
         "ProjectID": project_id,
         "ActivityID": activity_id,
         "DesignationID": designation_id,
-        "WeekEnding": None,
+        "WeekEnding": we,
         "EntryDate": fmt(date),
         "DayID": None,
         "Hours": hours,
@@ -513,6 +514,7 @@ async def save_session(context: BrowserContext):
 
 
 async def navigate_to_timesheets(page: Page):
+    await page.wait_for_load_state("networkidle", timeout=30000)
     await page.locator('text=My Timesheets').first.click(timeout=60000)
     await page.wait_for_timeout(2000)
 
@@ -678,10 +680,12 @@ async def discover_all(page: Page):
     await navigate_to_timesheets(page)
     iframe = page.frame(name="Content") or page.frames[1]
 
-    emp_id, entity_id = await iframe.evaluate(
-        "() => [SCUBED.Employee.ID, SCUBED.Employee.EntityID || 1]"
+    emp_id, entity_id, emp_name = await iframe.evaluate(
+        "() => [SCUBED.Employee.ID, SCUBED.Employee.EntityID || 1, "
+        "(SCUBED.Employee.Name || SCUBED.Employee.FullName || '(unknown)')]"
     )
-    print(f"Employee {emp_id} / Entity {entity_id} — crawling catalog...")
+    print(f"Detected Employee: {emp_name}  (ID: {emp_id}, Entity: {entity_id})")
+    print(f"  If this name is not yours, update the Employee ID in Settings.")
 
     catalog = await iframe.evaluate(
         """async ([empId, entityId]) => {
@@ -759,8 +763,37 @@ async def discover_all(page: Page):
         print(f"Mappings already exist at {MAPPINGS_FILE} — not overwritten.")
 
 
+async def check_existing_entries(iframe, week_end: datetime) -> list[dict] | None:
+    """Check S-Cubed for existing timesheet entries for the given week.
+    Returns list of entries if check succeeded, None if the API endpoint is unavailable."""
+    emp_id = EMPLOYEE_ID or (load_catalog() or {}).get("employee_id")
+    result = await iframe.evaluate(
+        """async ([weekEnding, empId]) => {
+            try {
+                const r = await fetch('/SCUBED/pages/tlc_api/Timesheet_Entries.aspx/GetTimesheet_EntriesListByWeekEnding', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json; charset=utf-8'},
+                    body: JSON.stringify({WeekEnding: weekEnding, EmployeeID: empId}),
+                    credentials: 'include'
+                });
+                if (r.status === 404 || r.status === 405) return {ok: false, error: 'endpoint not found (' + r.status + ')'};
+                const data = await r.json();
+                if (data.d !== undefined) return {ok: true, entries: data.d || []};
+                return {ok: false, error: 'unexpected response shape'};
+            } catch(e) {
+                return {ok: false, error: e.message};
+            }
+        }""",
+        [fmt(week_end), emp_id],
+    )
+    if result.get("ok"):
+        return result.get("entries", [])
+    print(f"  (Duplicate check unavailable: {result.get('error', '?')} — proceeding with save)")
+    return None
+
+
 async def create_week(page: Page, browser: Browser, target_date: datetime | None = None, headless: bool = False, pre_cal: dict | None = None):
-    """Create timesheet entries with per-day comments and auto-selected client/project from catalog."""
+    """Create timesheet draft entries with per-day comments and auto-selected client/project from catalog."""
     date     = target_date or datetime.today()
     week_end = week_ending_for(date)
     days     = working_days(week_end)
@@ -789,9 +822,11 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
         print("Run 'python timesheet_bot.py discover_all' to set up the catalog.")
         return
 
-    print(f"Creating timesheet for week ending {fmt(week_end)}")
+    emp_id_display = EMPLOYEE_ID or (catalog or {}).get("employee_id") if use_auto else EMPLOYEE_ID
+    print(f"Creating draft timesheet for week ending {fmt(week_end)}  (Employee ID: {emp_id_display})")
     print(f"  Days: {', '.join(d.strftime('%a %d %b') for d in days)}")
     print(f"  Hours/day: {HOURS_PER_DAY}  ->  Total: {HOURS_PER_DAY * 5}h")
+    print(f"  Mode: DRAFT ONLY — entries are saved but not submitted for approval.")
 
     # Gather per-day enrichment
     cal_events: dict[str, list[str]] = {}
@@ -830,26 +865,33 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
                     groups[key]["git"][repo] = git_work[date_str][repo]
 
             if not groups:
-                # No repos matched — use default client with full hours
                 ids = resolve_project_ids("", catalog, mappings)
                 if ids:
                     comment = build_day_comment(events, [], {})
-                    new_entries.append(build_entry(d, HOURS_PER_DAY, comment, **ids))
+                    new_entries.append(build_entry(d, HOURS_PER_DAY, comment, **ids, week_ending=week_end))
                     print(f"  {d.strftime('%a %d %b')} (default) {HOURS_PER_DAY}h  ->  {comment}")
                 continue
 
             hours_list = split_hours(HOURS_PER_DAY, len(groups))
             for (client_id, _), group, hours in zip(groups.keys(), groups.values(), hours_list):
                 comment = build_day_comment(events, group["repos"], group["git"])
-                new_entries.append(build_entry(d, hours, comment, **group["ids"]))
+                new_entries.append(build_entry(d, hours, comment, **group["ids"], week_ending=week_end))
                 print(f"  {d.strftime('%a %d %b')} [client={client_id}] {hours}h  ->  {comment}")
         else:
             comment = build_day_comment(events, claude_projects.get(date_str, []), git_work.get(date_str, {}))
-            new_entries.append(build_entry(d, HOURS_PER_DAY, comment, CLIENT_ID, PROJECT_ID, ACTIVITY_ID, DESIGNATION_ID))
+            new_entries.append(build_entry(d, HOURS_PER_DAY, comment, CLIENT_ID, PROJECT_ID, ACTIVITY_ID, DESIGNATION_ID, week_ending=week_end))
             print(f"  {d.strftime('%a %d %b')}  ->  {comment}")
 
     await navigate_to_timesheets(page)
     iframe = page.frame(name="Content") or page.frames[1]
+
+    existing = await check_existing_entries(iframe, week_end)
+    if existing is not None and len(existing) > 0:
+        print(f"\n⚠️  {len(existing)} entries already exist on S-Cubed for week ending {week_key}.")
+        print(f"   Existing entry dates: {', '.join(e.get('EntryDate', '?') for e in existing)}")
+        print(f"   Skipping save to avoid duplicates. Delete existing entries in S-Cubed first,")
+        print(f"   or remove the week from {SUBMITTED_LEDGER_FILE.name} if you want to retry.")
+        return
 
     result = await iframe.evaluate(
         """async ([newEntries]) => {
@@ -877,15 +919,24 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
 
     if status == 200 and body and body.get("d") is not None:
         ids = [e.get("Timesheet_EntryID") for e in (body["d"] or [])]
-        print(f"\n✅ Saved {len(ids)} entries  (IDs: {ids})")
+        print(f"\n✅ Draft saved — {len(ids)} entries created (IDs: {ids})")
+        print(f"   Review your timesheet in S-Cubed and submit for approval when ready.")
         _record_submitted_week(week_key, ids)
         if SUBMIT_AFTER_SAVE and ids:
             await submit_entries(iframe, ids)
     else:
         print(f"\n❌ Save failed (HTTP {status}): {json.dumps(body or result.get('raw', ''))[:500]}")
         if isinstance(body, dict) and "error processing the request" in (body.get("Message") or "").lower():
-            print("   This generic error has previously shown up when entries already exist")
-            print(f"   for week ending {week_key} — check S-Cubed's timesheet grid manually before retrying.")
+            print("\n   Possible causes:")
+            print(f"   1. Entries may already exist for week ending {week_key}")
+            print(f"      -> Check S-Cubed's timesheet grid manually")
+            print(f"   2. Employee ID ({new_entries[0].get('EmployeeID')}) may be incorrect")
+            print(f"      -> Run First-time Setup again or update Employee ID in Settings")
+            print(f"   3. You may not be authorised for project {new_entries[0].get('ProjectID')}")
+            print(f"      -> Check your assigned projects in S-Cubed")
+            print(f"\n   To help diagnose: open S-Cubed in your browser, manually save")
+            print(f"   one timesheet entry, then open DevTools (F12) -> Network tab and")
+            print(f"   look at the BatchTransactionTimesheet_Entry request payload.")
         print(f"\n── Request payload (for debugging) ──")
         for i, entry in enumerate(new_entries):
             print(f"  Entry {i}: date={entry['EntryDate']} hours={entry['Hours']} "
@@ -984,7 +1035,8 @@ async def preview_week(browser: Browser, target_date: datetime | None = None, he
         print("   Run 'First-time Setup' (or `python timesheet_bot.py discover_all`) first —")
         print("   client/project below will show as None until that's done.\n")
 
-    print(f"Preview for week ending {fmt(week_end)}")
+    emp_id = EMPLOYEE_ID or (catalog or {}).get("employee_id")
+    print(f"Preview for week ending {fmt(week_end)}  (Employee ID: {emp_id})")
     print(f"  Days: {', '.join(d.strftime('%a %d %b') for d in days)}")
 
     cal_events: dict[str, list[str]] = {}
