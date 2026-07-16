@@ -24,11 +24,28 @@ import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
+import time
 from playwright.async_api import async_playwright, Page, BrowserContext, Browser
 
 
 class AuthRequired(Exception):
     """Raised when a login page is detected in headless mode."""
+
+
+async def _poll_page(page: Page, expression: str, timeout: int = 300000, interval: int = 1000):
+    """Poll a JS expression until truthy via page.evaluate().
+    Replaces wait_for_function which crashes on pages that modify Map/Set
+    prototypes (breaks Playwright's SelectorEvaluator initialization)."""
+    deadline = time.monotonic() + timeout / 1000
+    while time.monotonic() < deadline:
+        try:
+            result = await page.evaluate(expression)
+            if result:
+                return result
+        except Exception:
+            pass
+        await page.wait_for_timeout(interval)
+    raise TimeoutError(f"Timed out after {timeout}ms")
 
 # In a frozen PyInstaller build, __file__ resolves inside the onefile temp
 # extraction dir (e.g. _MEI*), which is wiped when the process exits. Session,
@@ -322,7 +339,8 @@ async def fetch_outlook_calendar(browser: Browser, week_dates: list[datetime], h
             print("   (a browser window has opened — check your taskbar if you don't see it;")
             print("    don't close this app until login finishes, it will stop the browser)")
             await page.bring_to_front()
-            await page.wait_for_function(
+            await _poll_page(
+                page,
                 "() => window.location.hostname === 'outlook.office.com'",
                 timeout=300000,
             )
@@ -453,7 +471,7 @@ def build_entry(date: datetime, hours: float, comment: str, client_id: int, proj
         "DesignationID": designation_id,
         "WeekEnding": we,
         "EntryDate": fmt(date),
-        "DayID": None,
+        "DayID": (date.weekday() + 1) % 7,
         "Hours": hours,
         "InvoicedHours": 0,
         "EntryTimestamp": INSERT_TIMESTAMP,
@@ -496,9 +514,10 @@ async def login(context: BrowserContext, page: Page, headless: bool = False) -> 
     # intermediate page during the multi-hop SSO redirect (Microsoft -> Okta ->
     # back to scubed.aspx), reporting success before the browser has actually
     # landed back on the dashboard.
-    await page.wait_for_function(
+    await _poll_page(
+        page,
         "() => location.href.includes('/scubed.aspx') && "
-        "(document.querySelector('#nav_weeks') || document.querySelector('#ifrm'))",
+        "!!(document.querySelector('#nav_weeks') || document.querySelector('#ifrm'))",
         timeout=300000,
     )
     await page.wait_for_timeout(1000)
@@ -787,7 +806,13 @@ async def check_existing_entries(iframe, week_end: datetime) -> list[dict] | Non
         [fmt(week_end), emp_id],
     )
     if result.get("ok"):
-        return result.get("entries", [])
+        entries = result.get("entries", [])
+        if entries:
+            sample = entries[0]
+            print(f"  (Server entry sample: DayID={sample.get('DayID')}, "
+                  f"WeekEnding={sample.get('WeekEnding')}, "
+                  f"EntryDate={sample.get('EntryDate')})")
+        return entries
     print(f"  (Duplicate check unavailable: {result.get('error', '?')} — proceeding with save)")
     return None
 
@@ -884,6 +909,7 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
 
     await navigate_to_timesheets(page)
     iframe = page.frame(name="Content") or page.frames[1]
+    await page.wait_for_timeout(2000)
 
     existing = await check_existing_entries(iframe, week_end)
     if existing is not None and len(existing) > 0:

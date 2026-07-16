@@ -3,9 +3,23 @@
 
 import asyncio
 import json
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from playwright.async_api import async_playwright
+
+
+async def _poll_page(page, expression, timeout=300000, interval=1000):
+    deadline = time.monotonic() + timeout / 1000
+    while time.monotonic() < deadline:
+        try:
+            result = await page.evaluate(expression)
+            if result:
+                return result
+        except Exception:
+            pass
+        await page.wait_for_timeout(interval)
+    raise TimeoutError(f"Timed out after {timeout}ms")
 
 OUTLOOK_SESSION_FILE = Path(__file__).parent / "outlook_session.json"
 OUTLOOK_CAL_URL = "https://outlook.office.com/calendar/view/week"
@@ -46,7 +60,8 @@ async def main():
             print("Log in with your Datacentrix Okta credentials, then come back here.")
             print("Waiting up to 5 minutes…")
             # Wait until we land back on outlook.office.com
-            await page.wait_for_function(
+            await _poll_page(
+                page,
                 "() => window.location.hostname === 'outlook.office.com'",
                 timeout=300000,
             )
