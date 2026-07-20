@@ -465,6 +465,7 @@ def build_entry(date: datetime, hours: float, comment: str, client_id: int, proj
     return {
         "Timesheet_EntryID": -1,
         "EmployeeID": emp_id,
+        "EntityID": ENTITY_ID,
         "ClientID": client_id,
         "ProjectID": project_id,
         "ActivityID": activity_id,
@@ -942,14 +943,42 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
 
     status = result.get("status")
     body   = result.get("body")
+    print(f"\n(Server response: HTTP {status}, body={json.dumps(body)[:500] if body is not None else result.get('raw', '')[:500]})")
 
     if status == 200 and body and body.get("d") is not None:
         ids = [e.get("Timesheet_EntryID") for e in (body["d"] or [])]
-        print(f"\n✅ Draft saved — {len(ids)} entries created (IDs: {ids})")
-        print(f"   Review your timesheet in S-Cubed and submit for approval when ready.")
-        _record_submitted_week(week_key, ids)
-        if SUBMIT_AFTER_SAVE and ids:
-            await submit_entries(iframe, ids)
+
+        if len(ids) != len(new_entries):
+            print(f"\n⚠️  Server returned {len(ids)} entry IDs but {len(new_entries)} were sent — partial save, check S-Cubed manually.")
+
+        # The server can return HTTP 200 with IDs without the rows actually being
+        # queryable afterwards (e.g. wrong EntityID/authorisation). Don't trust the
+        # save response alone — read the week back and confirm the rows exist.
+        await page.wait_for_timeout(1500)
+        verify = await check_existing_entries(iframe, week_end)
+        if verify is None:
+            print(f"\n✅ Draft save request accepted — {len(ids)} entries created (IDs: {ids})")
+            print(f"   ⚠️  Could not verify server-side (duplicate-check endpoint unavailable).")
+            print(f"   Please open S-Cubed's timesheet grid manually and confirm the week actually shows these entries.")
+            _record_submitted_week(week_key, ids)
+        elif len(verify) == 0:
+            print(f"\n❌ Save reported success (IDs: {ids}) but re-reading week {week_key} from S-Cubed shows ZERO entries.")
+            print(f"   The server accepted the request but did not persist it — do not trust this run.")
+            print(f"   Do not retry blindly (you'll create the same silent-fail pattern). Check S-Cubed manually,")
+            print(f"   and if it's still empty, open DevTools -> Network on a manual save and compare the payload")
+            print(f"   against the one printed below.")
+            print(f"\n── Request payload (for debugging) ──")
+            for i, entry in enumerate(new_entries):
+                print(f"  Entry {i}: date={entry['EntryDate']} hours={entry['Hours']} "
+                      f"client={entry['ClientID']} project={entry['ProjectID']} "
+                      f"activity={entry['ActivityID']} designation={entry['DesignationID']} "
+                      f"employee={entry['EmployeeID']} entity={entry['EntityID']}")
+        else:
+            print(f"\n✅ Draft saved and verified — {len(verify)} entries now on S-Cubed for week ending {week_key}.")
+            print(f"   Review your timesheet in S-Cubed and submit for approval when ready.")
+            _record_submitted_week(week_key, ids)
+            if SUBMIT_AFTER_SAVE and ids:
+                await submit_entries(iframe, ids)
     else:
         print(f"\n❌ Save failed (HTTP {status}): {json.dumps(body or result.get('raw', ''))[:500]}")
         if isinstance(body, dict) and "error processing the request" in (body.get("Message") or "").lower():
@@ -968,7 +997,7 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
             print(f"  Entry {i}: date={entry['EntryDate']} hours={entry['Hours']} "
                   f"client={entry['ClientID']} project={entry['ProjectID']} "
                   f"activity={entry['ActivityID']} designation={entry['DesignationID']} "
-                  f"employee={entry['EmployeeID']}")
+                  f"employee={entry['EmployeeID']} entity={entry['EntityID']}")
             print(f"    Comment: {entry['Comment'][:120]}")
         print(f"  WeekEnding={new_entries[0].get('WeekEnding')} "
               f"DayID={new_entries[0].get('DayID')} "
