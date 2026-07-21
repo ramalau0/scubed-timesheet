@@ -279,7 +279,10 @@ class TimesheetApp:
                     node, cli = compute_driver_executable()
                     cmd = [node, cli, 'install', 'chromium']
 
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                kwargs = {}
+                if sys.platform == 'win32':
+                    kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+                result = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
                 if result.returncode == 0:
                     self._log_from_thread("Browser installed. Ready.")
                 else:

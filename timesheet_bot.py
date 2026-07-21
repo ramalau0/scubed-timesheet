@@ -13,6 +13,8 @@ import re
 import subprocess
 import sys
 
+_SUBPROCESS_KWARGS = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+
 # Fix Windows console encoding for emoji/unicode characters
 # sys.stdout/stderr are None when running as a windowed PyInstaller app (no console)
 if sys.platform == "win32":
@@ -252,6 +254,7 @@ def _git_author_email(repo: Path) -> str | None:
         out = subprocess.check_output(
             ["git", "config", "--get", "user.email"],
             cwd=repo, text=True, stderr=subprocess.DEVNULL, timeout=5,
+            **_SUBPROCESS_KWARGS,
         )
         return out.strip() or None
     except (subprocess.SubprocessError, OSError):
@@ -277,6 +280,7 @@ def get_git_work_for_date(target_date: datetime) -> dict[str, list[str]]:
                     cmd.append(f"--author={author}")
                 out = subprocess.check_output(
                     cmd, cwd=repo, text=True, stderr=subprocess.DEVNULL, timeout=5,
+                    **_SUBPROCESS_KWARGS,
                 )
                 msgs = [m.strip() for m in out.splitlines() if m.strip()]
                 if msgs:
