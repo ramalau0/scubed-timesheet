@@ -5,6 +5,7 @@ Wraps timesheet_bot.py in a simple Tkinter window.
 import asyncio
 import io
 import os
+import random
 import subprocess
 import sys
 import threading
@@ -65,6 +66,8 @@ class TimesheetApp:
         self.root.resizable(True, True)
         self.root.minsize(600, 500)
         self._busy = False
+        self._last_command = None
+        self._save_result = None  # "success", "failed", or None
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
 
         self._build_ui()
@@ -330,12 +333,25 @@ class TimesheetApp:
 
     def _run(self, command: str):
         self._set_busy(True)
+        self._last_command = command
+        self._save_result = None
         self._append(f"\n{'=' * 56}")
         self._append(f"  {command.upper()}")
         self._append(f"{'=' * 56}")
 
+        def _check_output(text: str):
+            if command == "create" and self._save_result is None:
+                if "Draft saved and verified" in text or "Draft save request accepted" in text:
+                    self._save_result = "success"
+                elif "Save failed" in text:
+                    self._save_result = "failed"
+
         def worker():
-            redirect = RedirectText(self._log_from_thread)
+            def log_and_check(text):
+                _check_output(text)
+                self._log_from_thread(text)
+
+            redirect = RedirectText(log_and_check)
             old_stdout, old_stderr = sys.stdout, sys.stderr
             sys.stdout = redirect
             sys.stderr = redirect
@@ -350,8 +366,12 @@ class TimesheetApp:
                         run(headless=False, command=command, target=None))
                 except Exception as e2:
                     self._log_from_thread(f"Error: {e2}")
+                    if command == "create":
+                        self._save_result = "failed"
             except Exception as exc:
                 self._log_from_thread(f"Error: {exc}")
+                if command == "create":
+                    self._save_result = "failed"
             finally:
                 sys.stdout, sys.stderr = old_stdout, old_stderr
                 self.root.after(0, self._done)
@@ -361,6 +381,88 @@ class TimesheetApp:
     def _done(self):
         self._set_busy(False)
         self._refresh_status()
+        if self._last_command == "create" and self._save_result:
+            if self._save_result == "success":
+                self._show_celebration()
+            else:
+                self._show_failure()
+
+    # ── Save result feedback ────────────────────────────────────────────
+
+    def _show_failure(self):
+        messagebox.showerror(
+            "Save Failed",
+            "Timesheet draft could not be saved.\n\n"
+            "Check the activity log below for details.\n"
+            "Common causes: wrong Employee ID, entries already\n"
+            "exist for this week, or network issues.")
+
+    def _show_celebration(self):
+        overlay = tk.Canvas(
+            self.root, highlightthickness=0, bg="black")
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.update_idletasks()
+        w = overlay.winfo_width()
+        h = overlay.winfo_height()
+
+        overlay.create_text(
+            w // 2, h // 2 - 30,
+            text="Timesheet Saved!",
+            font=("TkDefaultFont", 28, "bold"),
+            fill="#00ff88", tags="msg")
+        overlay.create_text(
+            w // 2, h // 2 + 20,
+            text="Your draft entries are on S-Cubed.\nReview and submit for approval in S-Cubed.",
+            font=("TkDefaultFont", 12),
+            fill="white", tags="msg", justify=tk.CENTER)
+
+        colors = ["#ff6b6b", "#ffd93d", "#6bcb77", "#4d96ff",
+                  "#ff6fff", "#00d2ff", "#ff9f43", "#ffffff"]
+        particles = []
+        for _ in range(80):
+            x = random.randint(0, w)
+            y = random.randint(-h, 0)
+            size = random.randint(4, 10)
+            color = random.choice(colors)
+            vx = random.uniform(-3, 3)
+            vy = random.uniform(1, 5)
+            shape = random.choice(["rect", "oval"])
+            if shape == "rect":
+                pid = overlay.create_rectangle(
+                    x, y, x + size, y + size * 0.6,
+                    fill=color, outline="")
+            else:
+                pid = overlay.create_oval(
+                    x, y, x + size, y + size,
+                    fill=color, outline="")
+            particles.append({
+                "id": pid, "x": x, "y": y,
+                "vx": vx, "vy": vy, "size": size,
+                "spin": random.uniform(-0.1, 0.1)})
+
+        frame = [0]
+
+        def animate():
+            if frame[0] > 120:
+                overlay.destroy()
+                return
+            for p in particles:
+                p["x"] += p["vx"]
+                p["vy"] += 0.12
+                p["y"] += p["vy"]
+                p["vx"] *= 0.99
+                dx, dy = p["vx"], p["vy"]
+                overlay.move(p["id"], dx, dy)
+            if frame[0] > 80:
+                fade = max(0, (120 - frame[0]) / 40)
+                grey = int(fade * 255)
+                msg_color = f"#{grey:02x}{min(255, int(fade * 255)):02x}{grey:02x}"
+                overlay.itemconfig("msg", fill=msg_color)
+            frame[0] += 1
+            overlay.after(25, animate)
+
+        overlay.after(50, animate)
+        overlay.bind("<Button-1>", lambda e: overlay.destroy())
 
     # ── Button handlers ──────────────────────────────────────────────────
 

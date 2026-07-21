@@ -461,21 +461,20 @@ def build_day_comment(cal_events: list[str], projects: list[str], git_work: dict
 
 def build_entry(date: datetime, hours: float, comment: str, client_id: int, project_id: int, activity_id: int, designation_id: int, week_ending: datetime | None = None) -> dict:
     emp_id = EMPLOYEE_ID or (load_catalog() or {}).get("employee_id")
-    we = fmt(week_ending) if week_ending else None
+    hours_str = f"{hours:.2f}"
     return {
         "Timesheet_EntryID": -1,
         "EmployeeID": emp_id,
-        "EntityID": ENTITY_ID,
         "ClientID": client_id,
         "ProjectID": project_id,
         "ActivityID": activity_id,
         "DesignationID": designation_id,
-        "WeekEnding": we,
         "EntryDate": fmt(date),
-        "DayID": (date.weekday() + 1) % 7,
-        "Hours": hours,
-        "InvoicedHours": 0,
-        "EntryTimestamp": INSERT_TIMESTAMP,
+        "Hours": hours_str,
+        "Travel": 0,
+        "Travel_Hours": 0,
+        "InvoicedHours": hours_str,
+        "EntryTimestamp": fmt(datetime.now()),
         "Comment": comment,
         "Invoiced": False,
         "InvoiceNumber": "",
@@ -483,13 +482,12 @@ def build_entry(date: datetime, hours: float, comment: str, client_id: int, proj
         "WriteOffComment": "",
         "Timestamp": INSERT_TIMESTAMP,
         "ApprovalLevelID": 0,
-        "LastApprovedByEmployeeID": 0,
+        "LastApprovedByEmployeeID": -1,
         "LastApprovedOnDate": None,
         "RejectionCount": 0,
         "LastRejectedByEmployeeID": None,
         "LastRejectedOnDate": None,
-        "LastRejectionReason": None,
-        "Context": None,
+        "LastRejectionReason": "",
     }
 
 
@@ -783,17 +781,22 @@ async def discover_all(page: Page):
         print(f"Mappings already exist at {MAPPINGS_FILE} — not overwritten.")
 
 
-async def check_existing_entries(iframe, week_end: datetime) -> list[dict] | None:
+async def check_existing_entries(iframe, week_end: datetime, emp_id_override: int | None = None) -> list[dict] | None:
     """Check S-Cubed for existing timesheet entries for the given week.
     Returns list of entries if check succeeded, None if the API endpoint is unavailable."""
-    emp_id = EMPLOYEE_ID or (load_catalog() or {}).get("employee_id")
+    emp_id = emp_id_override or EMPLOYEE_ID or (load_catalog() or {}).get("employee_id")
     result = await iframe.evaluate(
         """async ([weekEnding, empId]) => {
             try {
-                const r = await fetch('/SCUBED/pages/tlc_api/Timesheet_Entries.aspx/GetTimesheet_EntriesListByWeekEnding', {
+                const r = await fetch('/SCUBED/pages/tlc_api/Timesheet_Entries.aspx/GetEmployeeWeekTimesheet_Entries', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json; charset=utf-8'},
-                    body: JSON.stringify({WeekEnding: weekEnding, EmployeeID: empId}),
+                    body: JSON.stringify({
+                        EmployeeID: empId,
+                        WeekEnding: weekEnding,
+                        Paging: {PageNumber: 1, PageSize: 50, PageOrderBy: 'aaaa', PageOrderByDirection: 'aaaa', Extra: [{ID: 'Search', Value: null}, {ID: 'Order', Value: null}]},
+                        PageNumber: 1
+                    }),
                     credentials: 'include'
                 });
                 if (r.status === 404 || r.status === 405) return {ok: false, error: 'endpoint not found (' + r.status + ')'};
@@ -912,7 +915,14 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
     iframe = page.frame(name="Content") or page.frames[1]
     await page.wait_for_timeout(2000)
 
-    existing = await check_existing_entries(iframe, week_end)
+    live_emp_id = await iframe.evaluate("() => SCUBED.Employee.ID")
+    if live_emp_id and live_emp_id != new_entries[0]["EmployeeID"]:
+        print(f"  (Session employee ID {live_emp_id} differs from configured {new_entries[0]['EmployeeID']} — using session ID)")
+        for entry in new_entries:
+            entry["EmployeeID"] = live_emp_id
+
+    save_emp_id = new_entries[0]["EmployeeID"]
+    existing = await check_existing_entries(iframe, week_end, emp_id_override=save_emp_id)
     if existing is not None and len(existing) > 0:
         print(f"\n⚠️  {len(existing)} entries already exist on S-Cubed for week ending {week_key}.")
         print(f"   Existing entry dates: {', '.join(e.get('EntryDate', '?') for e in existing)}")
@@ -923,7 +933,7 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
     result = await iframe.evaluate(
         """async ([newEntries]) => {
             const body = JSON.stringify({
-                OldTimesheet_EntryList: [],
+                OldTimesheet_EntryList: null,
                 NewTimesheet_EntryList: newEntries,
                 Save: true
             });
@@ -955,7 +965,7 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
         # queryable afterwards (e.g. wrong EntityID/authorisation). Don't trust the
         # save response alone — read the week back and confirm the rows exist.
         await page.wait_for_timeout(1500)
-        verify = await check_existing_entries(iframe, week_end)
+        verify = await check_existing_entries(iframe, week_end, emp_id_override=save_emp_id)
         if verify is None:
             print(f"\n✅ Draft save request accepted — {len(ids)} entries created (IDs: {ids})")
             print(f"   ⚠️  Could not verify server-side (duplicate-check endpoint unavailable).")
@@ -972,7 +982,7 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
                 print(f"  Entry {i}: date={entry['EntryDate']} hours={entry['Hours']} "
                       f"client={entry['ClientID']} project={entry['ProjectID']} "
                       f"activity={entry['ActivityID']} designation={entry['DesignationID']} "
-                      f"employee={entry['EmployeeID']} entity={entry['EntityID']}")
+                      f"employee={entry['EmployeeID']}")
         else:
             print(f"\n✅ Draft saved and verified — {len(verify)} entries now on S-Cubed for week ending {week_key}.")
             print(f"   Review your timesheet in S-Cubed and submit for approval when ready.")
@@ -997,11 +1007,9 @@ async def create_week(page: Page, browser: Browser, target_date: datetime | None
             print(f"  Entry {i}: date={entry['EntryDate']} hours={entry['Hours']} "
                   f"client={entry['ClientID']} project={entry['ProjectID']} "
                   f"activity={entry['ActivityID']} designation={entry['DesignationID']} "
-                  f"employee={entry['EmployeeID']} entity={entry['EntityID']}")
+                  f"employee={entry['EmployeeID']}")
             print(f"    Comment: {entry['Comment'][:120]}")
-        print(f"  WeekEnding={new_entries[0].get('WeekEnding')} "
-              f"DayID={new_entries[0].get('DayID')} "
-              f"Timestamp={new_entries[0].get('Timestamp')}")
+        print(f"  Timestamp={new_entries[0].get('Timestamp')}")
 
 
 async def submit_entries(iframe, entry_ids: list[int]):
