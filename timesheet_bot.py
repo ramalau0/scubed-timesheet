@@ -801,7 +801,11 @@ async def check_existing_entries(iframe, week_end: datetime, emp_id_override: in
                 });
                 if (r.status === 404 || r.status === 405) return {ok: false, error: 'endpoint not found (' + r.status + ')'};
                 const data = await r.json();
-                if (data.d !== undefined) return {ok: true, entries: data.d || []};
+                if (data.d !== undefined) {
+                    const d = data.d;
+                    const entries = Array.isArray(d) ? d : (d && Array.isArray(d.Results)) ? d.Results : (d || []);
+                    return {ok: true, entries: entries};
+                }
                 return {ok: false, error: 'unexpected response shape'};
             } catch(e) {
                 return {ok: false, error: e.message};
@@ -811,6 +815,8 @@ async def check_existing_entries(iframe, week_end: datetime, emp_id_override: in
     )
     if result.get("ok"):
         entries = result.get("entries", [])
+        if not isinstance(entries, list):
+            entries = []
         if entries:
             sample = entries[0]
             print(f"  (Server entry sample: DayID={sample.get('DayID')}, "
